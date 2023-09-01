@@ -42,8 +42,14 @@ class Convention(object):
         self.bondParameters = self.dataForCalculation['bondParameters']
 
         self.tickerSymbol = self.bondParameters['tickerSymbol']                                        # 4.1.1 Биржевой тикер
-        self.deliveryDate = np.datetime64(self.bondParameters['deliveryDate'], 'D')                    # 4.1.2 Дата передачи
-        self.issueDate = np.datetime64(self.bondParameters['issueDate'], 'D')                          # 4.1.3 Дата размещения
+        self.issueDate = np.datetime64(self.bondParameters['issueDate'], 'D')                          # 4.1.2 Дата размещения
+
+        self.deliveryDate = None                                                                        # 4.1.3 Дата передачи
+        if self.bondParameters['deliveryDate'] is not None:
+            self.deliveryDate = np.datetime64(self.bondParameters['deliveryDate'], 'D')
+        else:
+            self.deliveryDate = self.issueDate
+
         self.firstCouponDate = np.datetime64(self.bondParameters['firstCouponDate'], 'D')              # 4.1.4 Дата первой купонной выплаты
         self.legalRedemptionDate = np.datetime64(self.bondParameters['legalRedemptionDate'], 'D')      # 4.1.5 Юридическая дата погашения
         self.actualRedemptionDate = None                                                               # 4.1.6 Фактическая дата погашения
@@ -51,9 +57,15 @@ class Convention(object):
             self.actualRedemptionDate = np.datetime64(self.bondParameters['actualRedemptionDate'], 'D')
         self.couponPeriod = int(self.bondParameters['couponPeriod'])                                   # 4.1.7 Длина купонного периода
         self.couponType = int(self.bondParameters['couponType'])                                       # 4.1.8 Тип расчета купонной выплаты
-        self.deliveryDebtAmount = float(self.bondParameters['deliveryDebtAmount'])                     # 4.1.9 Сумма остатков основного долга по акту передачи
-        self.startBondPrincipal = float(self.bondParameters['startBondPrincipal'])                     # 4.1.10 Первоначальный номинал облигации
-        self.startIssuePrincipal = float(self.bondParameters['startIssuePrincipal'])                   # 4.1.11 Первоначальный объем выпуска
+        self.startBondPrincipal = float(self.bondParameters['startBondPrincipal'])                     # 4.1.9 Первоначальный номинал облигации
+        self.startIssuePrincipal = float(self.bondParameters['startIssuePrincipal'])                   # 4.1.10 Первоначальный объем выпуска
+
+        self.deliveryDebtAmount = None
+        if self.bondParameters['deliveryDebtAmount'] is not None:
+            self.deliveryDebtAmount = float(self.bondParameters['deliveryDebtAmount'])                 # 4.1.11 Сумма остатков основного долга по акту передачи
+        else:
+            self.deliveryDebtAmount = self.startIssuePrincipal
+
         self.cleanUpPercentage = float(self.bondParameters['cleanUpPercentage'])                       # 4.1.12 Порог условия clean-up в %
         self.initialWAC = float(self.bondParameters['initialWAC'])                                     # 4.1.13 WAC по Реестру ипотечного покрытия на дату подписания решения о выпуске
         self.initialStandardWAM = float(self.bondParameters['initialStandardWAM'])                     # 4.1.14 WAM по РИП на дату подписания решения о выпуске (классическая формула)
