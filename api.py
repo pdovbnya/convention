@@ -37,7 +37,7 @@ getZCYCCoefficients_result = get(link.format(zcycDateTime)).json()
 
 # ----------------------------------------------------------------------------------- #
 
-""" МЕТОД GetZCYCCoefficients """
+""" МЕТОД GetSCurveEmpiricalData """
 
 link = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetSCurveEmpiricalData'
 
