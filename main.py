@@ -7,7 +7,7 @@ from convention import Convention
 
 pricingParameters = {
                      'isin': 'RU000A105NP4',
-                     'zSpread': 100,
+                     'zSpread': 100
                     }
 
 calculation_output = Convention(pricingParameters).calculate()
@@ -34,5 +34,5 @@ if pricing_result['durationMacaulay'] is not None:
     print(u'Дюрация Маколея   ' + '{:.2f}'.format(pricing_result['durationMacaulay']) + u' лет')
 
 if pricing_result['durationModified'] is not None:
-    print(u'Дюрация мод.      ' + '{:.2f}'.format(pricing_result['durationModified']) + u' лет')
+    print(u'Дюрация мод.      ' + '{:.2f}'.format(pricing_result['durationModified']) + u' п.п.')
 print('---------------------------------------------------------------------')

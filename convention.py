@@ -43,13 +43,7 @@ class Convention(object):
 
         self.tickerSymbol = self.bondParameters['tickerSymbol']                                        # 4.1.1 Биржевой тикер
         self.issueDate = np.datetime64(self.bondParameters['issueDate'], 'D')                          # 4.1.2 Дата размещения
-
-        self.deliveryDate = None                                                                        # 4.1.3 Дата передачи
-        if self.bondParameters['deliveryDate'] is not None:
-            self.deliveryDate = np.datetime64(self.bondParameters['deliveryDate'], 'D')
-        else:
-            self.deliveryDate = self.issueDate
-
+        self.deliveryDate = np.datetime64(self.bondParameters['deliveryDate'], 'D')                    # 4.1.3 Дата передачи
         self.firstCouponDate = np.datetime64(self.bondParameters['firstCouponDate'], 'D')              # 4.1.4 Дата первой купонной выплаты
         self.legalRedemptionDate = np.datetime64(self.bondParameters['legalRedemptionDate'], 'D')      # 4.1.5 Юридическая дата погашения
         self.actualRedemptionDate = None                                                               # 4.1.6 Фактическая дата погашения
@@ -59,20 +53,14 @@ class Convention(object):
         self.couponType = int(self.bondParameters['couponType'])                                       # 4.1.8 Тип расчета купонной выплаты
         self.startBondPrincipal = float(self.bondParameters['startBondPrincipal'])                     # 4.1.9 Первоначальный номинал облигации
         self.startIssuePrincipal = float(self.bondParameters['startIssuePrincipal'])                   # 4.1.10 Первоначальный объем выпуска
-
-        self.deliveryDebtAmount = None
-        if self.bondParameters['deliveryDebtAmount'] is not None:
-            self.deliveryDebtAmount = float(self.bondParameters['deliveryDebtAmount'])                 # 4.1.11 Сумма остатков основного долга по акту передачи
-        else:
-            self.deliveryDebtAmount = self.startIssuePrincipal
-
+        self.deliveryDebtAmount = float(self.bondParameters['deliveryDebtAmount'])                     # 4.1.11 Сумма остатков основного долга по акту передачи
         self.cleanUpPercentage = float(self.bondParameters['cleanUpPercentage'])                       # 4.1.12 Порог условия clean-up в %
         self.initialWAC = float(self.bondParameters['initialWAC'])                                     # 4.1.13 WAC по Реестру ипотечного покрытия на дату подписания решения о выпуске
         self.initialStandardWAM = float(self.bondParameters['initialStandardWAM'])                     # 4.1.14 WAM по РИП на дату подписания решения о выпуске (классическая формула)
         self.initialAdjustedWAM = float(self.bondParameters['initialAdjustedWAM'])                     # 4.1.15 WAM по РИП на дату подписания решения о выпуске (скорректированная формула)
         self.initialExpectedCDR = float(self.bondParameters['initialExpectedCDR'])                     # 4.1.16 Ожидаемый CDR на Дату передачи
 
-        self.fixedCouponRate = None  # 4.1.17 Фиксированная ставка купона
+        self.fixedCouponRate = None                                                                    # 4.1.17 Фиксированная ставка купона
         if self.couponType == COUPON_TYPE.FXD:
             self.fixedCouponRate = float(self.bondParameters['fixedCouponRate'])
 
@@ -129,7 +117,7 @@ class Convention(object):
         # ------------------------------- 5. ПАРАМЕТРЫ ОЦЕНКИ ------------------------------- #
         # ----------------------------------------------------------------------------------- #
 
-        # ----- 5.7 ДАТА ОЦЕНКИ -----
+        # ----- 5.8 ДАТА ОЦЕНКИ -----
         self.pricingDate = None
         if 'pricingDate' in self.pricingParameters.keys() and self.pricingParameters['pricingDate'] is not None:
             self.pricingDate = np.datetime64(self.pricingParameters['pricingDate'], 'D')
@@ -217,7 +205,7 @@ class Convention(object):
             else:
                 raise Exception(EXCEPTIONS.CALCULATION_TYPE_INCORRECT_CPN)
 
-        # ----- 5.8 ИНДИКАТОР ИСПОЛЬЗОВАНИЯ ТОЛЬКО ДОСТУПНОЙ НА ДАТУ ОЦЕНКИ ИНФОРМАЦИИ -----
+        # ----- 5.9 ИНДИКАТОР ИСПОЛЬЗОВАНИЯ ТОЛЬКО ДОСТУПНОЙ НА ДАТУ ОЦЕНКИ ИНФОРМАЦИИ -----
         self.usePricingDateDataOnly = False
         if 'usePricingDateDataOnly' in self.pricingParameters.keys() and self.pricingParameters['usePricingDateDataOnly'] is not None:
             self.usePricingDateDataOnly = bool(self.pricingParameters['usePricingDateDataOnly'])
@@ -229,7 +217,7 @@ class Convention(object):
         if self.isin == 'RU000A100DQ4':
             self.usePricingDateDataOnly = False
 
-        # ----- 5.9 ЗАДАННЫЙ CPR -----
+        # ----- 5.10 ЗАДАННЫЙ CPR -----
         self.cpr = None
         if 'cpr' in self.pricingParameters.keys() and self.pricingParameters['cpr'] is not None:
             if float(self.pricingParameters['cpr']) <= 100.0:
@@ -238,7 +226,7 @@ class Convention(object):
             else:
                 raise Exception(EXCEPTIONS.CPR_CDR_SUM_CHECK)
 
-        # ----- 5.10 ЗАДАННЫЙ CDR -----
+        # ----- 5.11 ЗАДАННЫЙ CDR -----
         self.cdr = None
         if 'cdr' in self.pricingParameters.keys() and self.pricingParameters['cdr'] is not None:
             if float(self.pricingParameters['cdr']) <= 100.0:
@@ -340,7 +328,7 @@ class Convention(object):
                 self.poolCashflowStartCouponDate = self.nextCouponDate
 
         # ----- 6.8 ЛАГ РАСЧЕТНОГО ПЕРИОДА -----
-        self.paymentPeriodLag = 1 if self.firstCouponDate.astype(object).day < 15 else 0
+        self.paymentPeriodLag = 1 if self.firstCouponDate.astype(object).day < 16 else 0
 
         # ----- 6.9 ДАТА НАЧАЛА РАСЧЕТНОГО ПЕРИОДА, С КОТОРОГО НАЧИНАЕТСЯ МОДЕЛИРОВАНИЕ ДЕНЕЖНОГО ПОТОКА ПО ПУЛУ ЗАКЛАДНЫХ -----
         self.poolCashflowStartPaymentPeriodDate = None
@@ -1102,11 +1090,19 @@ class Convention(object):
         # ------------------------ ПОДГОТОВКА ВЫХОДНЫХ ДАННЫХ РАСЧЕТА ----------------------- #
         # ----------------------------------------------------------------------------------- #
 
+        # В ТОМ СЛУЧАЕ, ЕСЛИ МОДЕЛЬ НЕ СМОДЕЛИРОВАЛА НИ ОДНОГО ДЕНЕЖНОГО ПОТОКА
+        # (Т.Е. ВСЕ БУДУЩИЕ ПОТОКИ ВЗЯТЫ ИЗ ОТЧЕТОВ ДЛЯ ИНВЕСТОРОВ), API НЕ ДОЛЖНО
+        # ВОЗВРАЩАТЬ ПАРАМЕТРЫ, СВЯЗАННЫЕ С МОДЕЛИРОВАНИЕ ДОСРОЧНЫХ ПОГАШЕНИЙ И ДЕФОЛТОВ
+        # (ГРАФИК S-КРИВОЙ, МОДЕЛЬНЫЕ CPR/CDR И Т.Д.)
+        self.no_model_flows = False
+        if False not in self.mbsCashflow['useInvestorsReports'].values:
+            self.no_model_flows = True
+
         # ----- ПАРАМЕТРЫ ОЦЕНКИ -----
         self.pricingParameters['pricingDate'] = str(self.pricingDate.astype(s_type))
         self.pricingParameters['usePricingDateDataOnly'] = self.usePricingDateDataOnly
-        self.pricingParameters['cpr'] = self.modelCPR
-        self.pricingParameters['cdr'] = self.modelCDR
+        self.pricingParameters['cpr'] = self.modelCPR if not self.no_model_flows else None
+        self.pricingParameters['cdr'] = self.modelCDR if not self.no_model_flows else None
         self.pricingParameters['zcycDateTime'] = str(self.zcycParameters['date'])
         self.pricingParameters['zcycParameters'] = self.zcycParameters
 
@@ -1203,54 +1199,53 @@ class Convention(object):
         if self.couponType in [COUPON_TYPE.FXD, COUPON_TYPE.CHG]:
             self.zcycGraph = {}
 
-            start_range = self.nextCouponDate
-            end_range = max(self.mbsCashflow['futureCouponDates'].values) + np.timedelta64(1, 'D')
-            step = np.timedelta64(1, 'D')
-            dates = np.arange(start_range, end_range, step).astype(d_type)
-            t = (dates - self.pricingDate) / np.timedelta64(1, 'D') / 365.0
+            end_range = round_ceil(max(self.mbsCashflow['futureCouponDates'].values - self.pricingDate) / np.timedelta64(1, 'D') / 365.0, 1)
+            t = np.arange(0.1, end_range + 0.1, 0.1)
             zcyc_values = np.round(Y(self.zcycParameters, t) / 100.0, 5)
 
             self.calculationOutput['zcycGraph'] = zcyc_values.tolist()
 
         # ----- ГРАФИК S-КРИВОЙ -----
-        self.sCurveGraph = pd.DataFrame({})
+        self.calculationOutput['sCurveGraph'] = None
+        if not self.no_model_flows:
+            self.sCurveGraph = pd.DataFrame({})
 
-        default_left = -7.0
-        default_right = 7.0
-        too_negative = self.incentiveToRefinance < default_left
-        too_positive = self.incentiveToRefinance > default_right
-        start_range = default_left if not too_negative else np.floor(self.incentiveToRefinance)
-        end_range = default_right if not too_positive else np.ceil(self.incentiveToRefinance)
+            default_left = -7.0
+            default_right = 7.0
+            too_negative = self.incentiveToRefinance < default_left
+            too_positive = self.incentiveToRefinance > default_right
+            start_range = default_left if not too_negative else np.floor(self.incentiveToRefinance)
+            end_range = default_right if not too_positive else np.ceil(self.incentiveToRefinance)
 
-        self.sCurveGraph.loc[:, 'graphIncentiveToRefinance'] = np.round(np.arange(start_range, end_range + 0.1, 0.1), 1)
-        self.sCurveGraph.loc[:, 'graphCPR'] = (self.calculationSCurveBeta0 + self.calculationSCurveBeta1 * np.arctan(self.calculationSCurveBeta2 + self.calculationSCurveBeta3 * self.sCurveGraph['graphIncentiveToRefinance'].values)) * 100.0
+            self.sCurveGraph.loc[:, 'graphIncentiveToRefinance'] = np.round(np.arange(start_range, end_range + 0.1, 0.1), 1)
+            self.sCurveGraph.loc[:, 'graphCPR'] = (self.calculationSCurveBeta0 + self.calculationSCurveBeta1 * np.arctan(self.calculationSCurveBeta2 + self.calculationSCurveBeta3 * self.sCurveGraph['graphIncentiveToRefinance'].values)) * 100.0
 
-        self.start = time.time()
-        self.sCurveEmpiricalData = pd.DataFrame(get(API.GET_SCURVE_EMPIRICAL_DATA, timeout=15).json())
-        self.end = time.time()
-        self.calculationTime['sCurveEmpiricalDataAPI'] = np.round(self.end - self.start, 2)
+            self.start = time.time()
+            self.sCurveEmpiricalData = pd.DataFrame(get(API.GET_SCURVE_EMPIRICAL_DATA, timeout=15).json())
+            self.end = time.time()
+            self.calculationTime['sCurveEmpiricalDataAPI'] = np.round(self.end - self.start, 2)
 
-        self.sCurveEmpiricalData['sCurveReportDate'] = pd.to_datetime(self.sCurveEmpiricalData['sCurveReportDate'])
-        self.sCurveEmpiricalData = self.sCurveEmpiricalData[self.sCurveEmpiricalData['sCurveReportDate'].values == self.calculationSCurveReportDate]
-        self.sCurveEmpiricalData['sCurveIncentiveToRefinance'] = np.round(self.sCurveEmpiricalData['sCurveIncentiveToRefinance'].values, 1)
+            self.sCurveEmpiricalData['sCurveReportDate'] = pd.to_datetime(self.sCurveEmpiricalData['sCurveReportDate'])
+            self.sCurveEmpiricalData = self.sCurveEmpiricalData[self.sCurveEmpiricalData['sCurveReportDate'].values == self.calculationSCurveReportDate]
+            self.sCurveEmpiricalData['sCurveIncentiveToRefinance'] = np.round(self.sCurveEmpiricalData['sCurveIncentiveToRefinance'].values, 1)
 
-        self.sCurveGraph = self.sCurveGraph.merge(self.sCurveEmpiricalData, left_on='graphIncentiveToRefinance', right_on='sCurveIncentiveToRefinance', how='left')
-        self.sCurveGraph.rename(columns={'sCurveEmpiricalCPR': 'graphEmpiricalCPR', 'sCurveEmpiricalDataVolume': 'graphEmpiricalDataVolume'}, inplace=True)
-        columns = ['graphIncentiveToRefinance', 'graphEmpiricalDataVolume', 'graphEmpiricalCPR', 'graphCPR']
-        self.sCurveGraph = self.sCurveGraph[columns]
+            self.sCurveGraph = self.sCurveGraph.merge(self.sCurveEmpiricalData, left_on='graphIncentiveToRefinance', right_on='sCurveIncentiveToRefinance', how='left')
+            self.sCurveGraph.rename(columns={'sCurveEmpiricalCPR': 'graphEmpiricalCPR', 'sCurveEmpiricalDataVolume': 'graphEmpiricalDataVolume'}, inplace=True)
+            columns = ['graphIncentiveToRefinance', 'graphEmpiricalDataVolume', 'graphEmpiricalCPR', 'graphCPR']
+            self.sCurveGraph = self.sCurveGraph[columns]
 
-        self.sCurveGraph['graphEmpiricalDataVolume'] = np.round(self.sCurveGraph['graphEmpiricalDataVolume'].values, 2)
-        self.sCurveGraph['graphEmpiricalCPR'] = np.round(self.sCurveGraph['graphEmpiricalCPR'].values, 5)
-        self.sCurveGraph['graphCPR'] = np.round(self.sCurveGraph['graphCPR'].values, 5)
-        self.sCurveGraph.replace({np.nan: None}, inplace=True)
+            self.sCurveGraph['graphEmpiricalDataVolume'] = np.round(self.sCurveGraph['graphEmpiricalDataVolume'].values, 2)
+            self.sCurveGraph['graphEmpiricalCPR'] = np.round(self.sCurveGraph['graphEmpiricalCPR'].values, 5)
+            self.sCurveGraph['graphCPR'] = np.round(self.sCurveGraph['graphCPR'].values, 5)
+            self.sCurveGraph.replace({np.nan: None}, inplace=True)
 
-        self.sCurveGraph = self.sCurveGraph.to_dict('list')
+            self.sCurveGraph = self.sCurveGraph.to_dict('list')
 
-        self.sCurveGraph['mbsPosition'] = {
-            'incentiveToRefinance': self.incentiveToRefinance,
-            'sCurveCPR': np.round((self.calculationSCurveBeta0 + self.calculationSCurveBeta1 * np.arctan(self.calculationSCurveBeta2 + self.calculationSCurveBeta3 * self.incentiveToRefinance)) * 100.0, 5)
-        }
-        self.calculationOutput['sCurveGraph'] = self.sCurveGraph
+            self.sCurveGraph['mbsPosition'] = {
+                'incentiveToRefinance': self.incentiveToRefinance,
+                'sCurveCPR': np.round((self.calculationSCurveBeta0 + self.calculationSCurveBeta1 * np.arctan(self.calculationSCurveBeta2 + self.calculationSCurveBeta3 * self.incentiveToRefinance)) * 100.0, 5)
+            }
+            self.calculationOutput['sCurveGraph'] = self.sCurveGraph
 
         # ----- ПЕРЕМЕННЫЕ РАСЧЕТА -----
         self.couponDatesSeries.loc[:, 'allCouponDates'] = self.couponDatesSeries['allCouponDates'].values.astype(s_type).astype(str)
@@ -1307,6 +1302,14 @@ class Convention(object):
         self.calculatedParameters['nextCouponKeyRate'] = self.nextCouponKeyRate
         self.calculatedParameters['nextCouponKeyRatePlusPremiumValueRubles'] = self.nextCouponKeyRatePlusPremiumValueRubles
         self.calculatedParameters['nextCouponKeyRatePlusPremiumValuePercents'] = self.nextCouponKeyRatePlusPremiumValuePercents
+
+        if self.no_model_flows:
+            important_parameters = ['couponDatesSeries', 'previousCouponDate', 'pricingDateIsValid', 'nextCouponDate', 'daysPassedInCurrentCouponPeriod',
+                                    'maximumCouponDateWithKnownPayment', 'numberOfBonds', 'currentBondPrincipal',
+                            ]
+            for parameter in self.calculatedParameters.keys():
+                if parameter not in important_parameters:
+                    self.calculatedParameters[parameter] = None
 
         self.calculationOutput['calculatedParameters'] = self.calculatedParameters
 

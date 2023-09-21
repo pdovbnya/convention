@@ -16,7 +16,7 @@ class API(object):
     """ Методы API """
 
     DATA_FOR_CALCULATION = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetDataForCalculation?isin={}'
-    GET_ZCYC_COEFFICIENTS = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetZCYCCoefficients?ZCYCDate={}'
+    GET_ZCYC_COEFFICIENTS = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetZCYCCoefficients?zcycDate={}'
     GET_SCURVE_EMPIRICAL_DATA = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetSCurveEmpiricalData'
 
 
@@ -33,9 +33,9 @@ class EXCEPTIONS(object):
     CALCULATION_TYPE_INCORRECT_CPN = 'Тип расчета ценовых параметров не соответствует Типу расчета купонной выплаты (см. раздел 5 в Методике)'
 
     PRICING_DATE_NOT_VALID_REASON_1 = 'Дата оценки не валидна, расчет не проводится. Причина: Дата оценки выходит за рамки юридического/фактического срока обращения выпуска облигаций'
-    PRICING_DATE_NOT_VALID_REASON_2 = 'Дата оценки не валидна, расчет не проводится. Причина: на Дату оценки нет актуального отчета для инвесторов. Обратитетсь в тех. поддержку'
+    PRICING_DATE_NOT_VALID_REASON_2 = 'Дата оценки не валидна, расчет не проводится. Причина: на Дату оценки нет актуального отчета для инвесторов. Обратитетсь в тех. поддержку по адресу calculator.service@domrf.ru'
 
-    NO_KEY_RATE_VALUE = 'В Данных по Ключевой ставке ЦБ РФ нет значения Ключевой ставки на {}. Обратитетсь в тех. поддержку'
+    NO_KEY_RATE_VALUE = 'В Данных по Ключевой ставке ЦБ РФ нет значения Ключевой ставки на {}. Обратитетсь в тех. поддержку по адресу calculator.service@domrf.ru'
 
 
 class CONSTRAINTS(object):
@@ -79,10 +79,15 @@ class COUPON_TYPE(object):
 
 def round_floor(x, decimals):
 
-    """ Функция, округляющая заданное число до ближайшей сотой вниз """
+    """ Функция, округляющая заданное число до заданного разряда вниз """
 
     return (math.floor(x * 10.0 ** float(decimals))) / 10.0 ** float(decimals)
 
+def round_ceil(x, decimals):
+
+    """ Функция, округляющая заданное число до заданного разряда вверх """
+
+    return (math.ceil(x * 10.0 ** float(decimals))) / 10.0 ** float(decimals)
 
 @np.vectorize
 def Y(params, t):
