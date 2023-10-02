@@ -1,4 +1,4 @@
-<p align="center"><img src=https://github.com/pdovbnya/convention/assets/45785005/760b8794-6d23-4df5-a553-afe68446ddb3 width="125" height="125"/></p>
+<p align="right"><img src=https://github.com/pdovbnya/convention/assets/45785005/760b8794-6d23-4df5-a553-afe68446ddb3 width="60" height="60"/></p>
 
 # Ценовая конвенция для ИЦБ ДОМ.РФ (версия 2.0)
 
