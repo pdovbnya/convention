@@ -1,6 +1,6 @@
-# Ценовая конвенция для ИЦБ ДОМ.РФ (версия 2.0)
+<img src=https://github.com/pdovbnya/convention/assets/45785005/760b8794-6d23-4df5-a553-afe68446ddb3 width="60" height="60" align="right"/>
 
-<img src=https://github.com/pdovbnya/convention/assets/45785005/760b8794-6d23-4df5-a553-afe68446ddb3 width="100" height="100" align="right"/>
+# Ценовая конвенция для ИЦБ ДОМ.РФ
 
 [МЕТОДИКА ОЦЕНКИ: КОНВЕНЦИЯ ИЦБ ДОМ.РФ 2.0](https://калькулятор.дом.рф/files/%D0%9A%D0%BE%D0%BD%D0%B2%D0%B5%D0%BD%D1%86%D0%B8%D1%8F%20%D0%98%D0%A6%D0%91%20%D0%94%D0%9E%D0%9C.%D0%A0%D0%A4%202.0.pdf)
 
