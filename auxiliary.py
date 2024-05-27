@@ -15,9 +15,9 @@ class API(object):
 
     """ Методы API """
 
-    DATA_FOR_CALCULATION = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetDataForCalculation?isin={}'
-    GET_ZCYC_COEFFICIENTS = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetZCYCCoefficients?zcycDate={}'
-    GET_SCURVE_EMPIRICAL_DATA = u'https://калькулятор.дом.рф:8193/DataSource/v1/GetSCurveEmpiricalData'
+    DATA_FOR_CALCULATION = u'https://xn--80atbdbsooh2gqb.xn--d1aqf.xn--p1ai:8193/DataSource/v1/GetDataForCalculation?isin={}'
+    GET_ZCYC_COEFFICIENTS = u'https://xn--80atbdbsooh2gqb.xn--d1aqf.xn--p1ai:8193/DataSource/v1/GetZCYCCoefficients?zcycDate={}'
+    GET_SCURVE_EMPIRICAL_DATA = u'https://xn--80atbdbsooh2gqb.xn--d1aqf.xn--p1ai:8193/DataSource/v1/GetSCurveEmpiricalData'
 
 
 class EXCEPTIONS(object):
