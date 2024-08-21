@@ -228,6 +228,8 @@ class Convention(object):
         self.serviceReportsStatistics = pd.DataFrame(self.dataForCalculation['serviceReportsStatistics'])
         self.serviceReportsStatistics['reportDate'] = pd.to_datetime(self.serviceReportsStatistics['reportDate'])
         self.serviceReportsStatistics.sort_values(by='reportDate', inplace=True)
+        c = ['currentCPR', 'currentCDR', 'historicalCPR', 'sixMonthsCPR', 'historicalCDR']
+        self.serviceReportsStatistics.loc[:, c] = self.serviceReportsStatistics[c].astype(float)
 
         # ----- ДАННЫЕ ОТЧЕТОВ ДЛЯ ИНВЕСТОРОВ ИЦБ ДОМ.РФ --------------------------------------------------------------------------------- #
         # Таблица необходимых данных из отчетов для инвесторов ИЦБ ДОМ.РФ:
@@ -1239,7 +1241,7 @@ class Convention(object):
                 current_cdr = 0.0
                 if current.sum() == 1:
                     cdr_value = self.serviceReportsStatistics[current]['currentCDR'].values[0]
-                    if cdr_value is not None:
+                    if not np.isnan(cdr_value):
                         current_cdr = cdr_value
 
                 defaults = np.round(self.mbsModel[part]['pool']['debt'].values[i] * (1.0 - (1.0 - current_cdr / 100.0) ** (1.0 / 12.0)), 2)
