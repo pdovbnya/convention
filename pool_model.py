@@ -9,12 +9,11 @@ import numpy as np
 import time
 import copy
 
-from cachetools import cached, LRUCache
 from requests import get
 from iteround import saferound
 
-from convention_2.auxiliary import *
-from convention_2.macro_model import *
+from auxiliary import *
+from macro_model import *
 
 import warnings
 

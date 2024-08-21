@@ -12,9 +12,6 @@ import asyncio
 import threading
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
-from ESB.ESBClient import client
-from ESB.PercentsNotificationMessage import PercentsNotificationMessage
-from globals import definitions
 from requests import post
 
 import warnings
@@ -259,7 +256,7 @@ def Y(params, t):
     return 10000.0 * (np.exp(g_t / 10000.0) - 1)
 
 
-# ----- ЗАПРОС НА ОБНОВЛЕНИЕ ДОЛИ ГОТОВНОСТИ РАСЧЕТА НА САЙТЕ КАЛЬКУЛЯТОРА --------------------------------------------------------------- #
+# ----- ОБНОВЛЕНИЕ ДОЛИ ГОТОВНОСТИ РАСЧЕТА ----------------------------------------------------------------------------------------------- #
 def update(connection_id, percent, progress_bar=None):
 
     percent = np.round(percent, 0)
@@ -267,13 +264,6 @@ def update(connection_id, percent, progress_bar=None):
     if connection_id is None and progress_bar is not None:
         progress_delta = int(percent) - int(progress_bar.n)
         progress_bar.update(int(progress_delta))
-
-    if connection_id is None:
-        return
-
-    message = PercentsNotificationMessage(connection_id, percent)
-
-    client.sendNotification(message)
 
 
 # ----- ТЕХНИЧЕСКИЕ ПЕРЕМЕННЫЕ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТА РАСЧЕТА В EXCEL-ФАЙЛ ------------------------------------------------------------ #
@@ -285,23 +275,23 @@ subs_cf = pd.DataFrame([])
 bond_cf = pd.DataFrame([])
 swap_cf = pd.DataFrame([])
 
-rslt_cols = ['name', 'isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'dirtyPrice', 'cleanPrice', 'poolModelCPR']
+rslt_cols = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'dirtyPrice', 'cleanPrice', 'poolModelCPR']
 
-rslt_cols_ifrs = ['name', 'isin', 'pricingDate', 'poolReportDate', 'zcycDateTime',
+rslt_cols_ifrs = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime',
                   'dirtyPrice', 'cleanPrice', 'swapPrice', 'swapPriceRub', 'poolModelCPR']
 
-pool_cols = ['name', 'isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'amortization', 'yield', 'subsidyPaid', 'cpr']
+pool_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'amortization', 'yield', 'subsidyPaid', 'cpr']
 
-pool_cols_ifrs = ['name', 'isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt',
+pool_cols_ifrs = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt',
                   'amortization', 'amortizationIFRS', 'yield', 'yieldIFRS', 'subsidyPaid', 'expensePart1', 'expensePart2', 'cpr']
 
-subs_cols = ['name', 'isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'keyRateStartDate', 'keyRate',
+subs_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'keyRateStartDate', 'keyRate',
              'waKeyRateDeduction', 'floatFraction', 'subsidyAccrued', 'subsidyPaymentDate', 'subsidyCouponDate', 'subsidyPaid']
 
-bond_cols = ['name', 'isin', 'pricingDate', 'couponDate', 'bondPrincipalStartPeriod', 'bondAmortization',
+bond_cols = ['isin', 'pricingDate', 'couponDate', 'bondPrincipalStartPeriod', 'bondAmortization',
              'bondCouponPayments', 'issuePrincipalStartPeriod', 'issueAmortization', 'issueCouponPayments']
 
-swap_cols = ['name', 'isin', 'pricingDate', 'nettingDate', 'fixedSum', 'yield', 'subsidy',
+swap_cols = ['isin', 'pricingDate', 'nettingDate', 'fixedSum', 'yield', 'subsidy',
              'reinvestment', 'expense', 'accruedYield', 'floatSum']
 
 date_cols = ['pricingDate', 'zcycDateTime', 'poolReportDate', 'reportDate', 'paymentMonth', 'keyRateStartDate',

@@ -19,9 +19,9 @@ import datetime as dt
 
 from requests import get
 from scipy.optimize import minimize
-from convention_2.auxiliary import *
-from convention_2.pool_model import *
-from convention_2.macro_model import *
+from auxiliary import *
+from pool_model import *
+from macro_model import *
 
 import warnings
 

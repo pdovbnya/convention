@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from requests import get
-from convention_2.auxiliary import *
+from auxiliary import *
 
 import warnings
 warnings.filterwarnings('ignore')
