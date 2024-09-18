@@ -21,10 +21,9 @@ warnings.filterwarnings('ignore')
 np.seterr(all='ignore')
 
 
-def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model_data, s_curves, cdr,
-                       ifrs=False, reinvestment=False, stop_date=None, key_rate_forecast=None,
-                       progress_bar=None, connection_id=None, current_percent=0.0, status_delta=0.0,
-                       pool_data_path=None):
+def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model_data, s_curves, cdr, cpr=None, ifrs=False,
+                       no_cdr_months=[0, 0], reinvestment=False, stop_date=None, key_rate_forecast=None,
+                       progress_bar=None, connection_id=None, current_percent=0.0, status_delta=0.0, pool_data=None):
     """
     ----------------------------------------------------------------------------------------------------------------------------------------
     Моделирование помесячных погашений основного долга, процентных поступлений и субсидий по ипотечному покрытию
@@ -43,17 +42,24 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             6. cdr                   — значение Модельного CDR
 
         Опциональные:
-            1. ifrs                 — True/False: моделировать ипотечное покрытие с учетом требований МСФО, по умолчанию false
-            2. reinvestment         — True/False: добавить в качестве выходных данных модели ежедневный денежный поток на баланс Ипотечного
+            1. cpr                  — пользовательское значение CPR для каждого платежа по каждому кредиту (одно значение на все платежи).
+                                      При заданном CPR S-кривые и Модельная траектория среднемесячной рыночной ставки рефинансирования ипо-
+                                      теки не используются. Каждый платеж по каждому кредиту рассчитывается исходя из заданного значения CPR
+            2. ifrs                 — True/False: моделировать ипотечное покрытие с учетом требований МСФО, по умолчанию false
+            3. no_cdr_months        — [0,0]: массив из двух целых чисел, первое из которых — количество месяцев от даты среза ипотечного
+                                      покрытия, с которого нужно обнулить дефолтность, второе — количество месяцев, на которое нужно
+                                      обнулить дефолтность (необходимо для того, чтобы учесть, что на дату передачи в ипотечном покрытии нет
+                                      кредитов с просроченной задолженностью)
+            4. reinvestment         — True/False: добавить в качестве выходных данных модели ежедневный денежный поток на баланс Ипотечного
                                       агента для дальнейшего расчета начисления процентной ставки на остаток на счете Ипотечного агента
-            3. stop_date            — точный день в формате даты, до которого необходимо моделировать платежи по кредитам
-            4. key_rate_forecast    — пользовательская траектория значений Ключевой ставки
-            5. Для отправки процентов готовности расчета:
-                    5.1 progress_bar         — запущенный в консоли progress bar
-                    5.2 connection_id        — идентификатор соединения с сайтом
-                    5.3 current_percent      — текущее значение готовности расчета в процентах
-                    5.4 status_delta         — дельта в процентах, на которую нужно увеличивать значение готовности расчета
-            6. pool_data_path       — путь на csv файл с данными по кредитам в ипотечном покрытии (запуск модели в обход основного расчета)
+            5. stop_date            — точный день в формате даты, до которого необходимо моделировать платежи по кредитам
+            6. key_rate_forecast    — пользовательская траектория значений Ключевой ставки
+            7. Для отправки процентов готовности расчета:
+                    7.1 progress_bar         — запущенный в консоли progress bar
+                    7.2 connection_id        — идентификатор соединения с сайтом
+                    7.3 current_percent      — текущее значение готовности расчета в процентах
+                    7.4 status_delta         — дельта в процентах, на которую нужно увеличивать значение готовности расчета
+            8. pool_data            — явно заданные параметры кредитов, может быть как путь на csv файл с данными, так и словарем с данными
 
     ----------------------------------------------------------------------------------------------------------------------------------------
 
@@ -124,7 +130,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     #       · keyRateDeduction     — Вычет для расчета субсидии по кредиту       [П.П]
 
     poolData = None
-    if pool_data_path is None:
+    if pool_data is None:
         server_output = get(API.GET_POOL_DATA.format(bond_id, report_date, ifrs), timeout=30).json()
         reportDate = np.datetime64(server_output['pools'][0]['reportDate'], 'D')
         if report_date != reportDate:
@@ -132,7 +138,10 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
         poolData = server_output['pools'][0]['data']
     else:
         reportDate = report_date
-        poolData = pd.read_excel(pool_data_path).to_dict('list')
+        if isinstance(pool_data, str):
+            poolData = pd.read_excel(pool_data).to_dict('list')
+        else:
+            poolData = pool_data
 
     # [ОБНОВЛЕНИЕ СТАТУСА РАСЧЕТА]
     current_percent += status_delta
@@ -479,7 +488,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     incentives = current_rates - rates_monthly_avg
 
     # Для каждой даты платежа по каждому кредиту (i,j) в таблице end_dates рассчитываем ожидаемый CPR:
-    cpr = b0 + b1 * np.arctan(b2 + b3 * incentives) + b4 * np.arctan(b5 + b6 * incentives)
+    cpr = b0 + b1 * np.arctan(b2 + b3 * incentives) + b4 * np.arctan(b5 + b6 * incentives) if cpr is None else np.full(s, cpr / 100.0)
 
     # [ОБНОВЛЕНИЕ СТАТУСА РАСЧЕТА]
     current_percent += status_delta
@@ -501,7 +510,9 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     # На основании заданного значения темпа выкупа дефолтов CDR рассчитываем постоянную долю от остатка основного долга на начало
     # процентного периода, которая будет приходиться на выкуп дефолтов у каждого кредита (иными словами, в отличие от CPR, CDR применяется
     # равномерно ко всем кредитам, т.е. ежемесячно определенная доля остатка основного долга по кредиту выкупается как дефолтная):
-    cdr_monthly = 1.0 - (1.0 - cdr / 100.0) ** (1.0 / 12.0)
+    cdr_monthly = np.empty(s)
+    cdr_monthly[:] = 1.0 - (1.0 - cdr / 100.0) ** (1.0 / 12.0)
+    cdr_monthly[no_cdr_months[0]:no_cdr_months[1]] = 0.0
 
     # Умножение таблиц plan_monthly_corrected и cpr_monthly на (1.0 - cdr_monthly * 3.0) необходимо для того, чтобы учесть, что по доле
     # кредитов, равной cdr_monthly * 3.0, не будут поступать плановые и досрочные погашения. Eжемесячно в ипотечном покрытии находятся:

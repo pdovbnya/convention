@@ -30,7 +30,6 @@ np.seterr(all='ignore')
 
 
 class Convention(object):
-
     """ Программная реализация Конвенции для ипотечных ценных бумаг """
 
     def __init__(self, input):
@@ -72,10 +71,8 @@ class Convention(object):
         self.startTime = np.datetime64('now') + 3 * hour
 
         # Инициализация прогресс-бара в консоли:
-        self.progressBar = None
-        if 'progressBar' in self.pricingParameters.keys() and self.pricingParameters['progressBar'] is True:
-            self.progressBar = tqdm.tqdm(total=100, file=sys.stdout, ncols=100, leave=False,
-                                         desc=self.bondID, bar_format="{l_bar}|{bar}| {n_fmt}/{total_fmt}{postfix}")
+        self.progressBar = tqdm.tqdm(total=100, file=sys.stdout, ncols=100, leave=False,
+                                     desc=self.bondID, bar_format="{l_bar}|{bar}| {n_fmt}/{total_fmt}{postfix}")
 
         # [ОБНОВЛЕНИЕ СТАТУСА РАСЧЕТА]
         self.currentPercent = 1.0
@@ -348,15 +345,26 @@ class Convention(object):
                     self.keyRateForecast['date'] = pd.to_datetime(self.keyRateForecast['date']).values.astype(d_type)
                     self.keyRateForecast.sort_values(by='date', inplace=True)
 
+        # ----- ЗАДАННЫЙ CPR ------------------------------------------------------------------------------------------------------------- #
+        # Пользовательское значение CPR для каждого платежа по каждому кредиту (одно значение на все платежи). При заданном CPR S-кривые и
+        # Модельная траектория среднемесячной рыночной ставки рефинансирования ипотеки не используются. Каждый платеж по каждому кредиту
+        # рассчитывается исходя из заданного значения CPR:
+        self.cpr = None
+        if 'cpr' in self.pricingParameters.keys() and self.pricingParameters['cpr'] is not None:
+            if 0.0 <= float(self.pricingParameters['cpr']) <= 80.0:
+                self.cpr = float(self.pricingParameters['cpr'])
+            else:
+                raise Exception(EXCEPTIONS._9)
+
         # ----- ЗАДАННЫЙ CDR ------------------------------------------------------------------------------------------------------------- #
         # Пользовательское значение Модельного CDR (modelCDR).
         # Значение по умолчанию – Конвенциональный CDR (conventionalCDR, будет установлено далее):
         self.cdr = None
         if 'cdr' in self.pricingParameters.keys() and self.pricingParameters['cdr'] is not None:
-            if float(self.pricingParameters['cdr']) <= 30.0:
+            if 0.0 <= float(self.pricingParameters['cdr']) <= 20.0:
                 self.cdr = float(self.pricingParameters['cdr'])
             else:
-                raise Exception(EXCEPTIONS._9)
+                raise Exception(EXCEPTIONS._10)
 
         # ----- ИНДИКАТОР ОКРУГЛЕНИЙ ----------------------------------------------------------------------------------------------------- #
         # В случае равенства индикатора единице значения ценовых метрик (pricingResult) будут указаны с точностью до соответствующего
@@ -412,9 +420,15 @@ class Convention(object):
         self.poolDownloadDate = None
         if self.usePricingDateDataOnly:
             self.poolDownloadDate = max(self.deliveryDate, self.pricingDate - self.poolDataDelay + self.ifrs * day)
-            # ("self.ifrs * day" добавляется для того, чтобы, например, на Дату оценки 31.03.2024 использовались данные на 01.04.2024)
+            # ("self.ifrs * day" добавляется для того, чтобы в случае расчета по требованиям МСФО на Дату оценки, например, 31.03.2024
+            # использовались данные на 01.04.2024)
         else:
             self.poolDownloadDate = np.datetime64('today')
+
+        # В случае, если облигации готовятся к выпуску, и необходимо провести расчет до размещения выпуска облигаций, то дату загрузки
+        # ипотечного покрытия необходимо перенести на дату передачи:
+        if self.poolDownloadDate < self.deliveryDate:
+            self.poolDownloadDate = self.deliveryDate
 
         # ----- ДАТА СРЕЗА ИПОТЕЧНОГО ПОКРЫТИЯ ДЛЯ РАСЧЕТА ------------------------------------------------------------------------------- #
         self.poolReportDate = None
@@ -436,7 +450,7 @@ class Convention(object):
             condition_1 = self.pricingDate != self.issueDate
             condition_2 = self.poolReportDate != self.pricingDate + day
             if condition_1 and condition_2:
-                raise Exception(EXCEPTIONS._10.format(str(self.pricingDate), str(self.poolReportDate)))
+                raise Exception(EXCEPTIONS._11.format(str(self.pricingDate), str(self.poolReportDate)))
 
         # ----- ТИП ИПОТЕЧНОГО ПОКРЫТИЯ -------------------------------------------------------------------------------------------------- #
         # В рамках методики выделяются три типа ипотечного покрытия:
@@ -474,7 +488,6 @@ class Convention(object):
         self.dirtyPrice = None  # ГРЯЗНАЯ ЦЕНА
         self.cleanPrice = None  # ЧИСТАЯ ЦЕНА
         self.requiredKeyRatePremium = None  # ТРЕБУЕМАЯ НАДБАВКА
-        self.couponRate = None  # ЗАДАННАЯ СТАВКА КУПОНА
 
         # В зависимости от заданной опорной метрики определяется Тип расчета, в соответствии с котором далее будет выбран алгоритм расчета:
         self.calculationType = None
@@ -486,37 +499,38 @@ class Convention(object):
         d = 'dirtyPrice' in self.pricingParameters.keys() and self.pricingParameters['dirtyPrice'] is not None
         c = 'cleanPrice' in self.pricingParameters.keys() and self.pricingParameters['cleanPrice'] is not None
         p = 'requiredKeyRatePremium' in self.pricingParameters.keys() and self.pricingParameters['requiredKeyRatePremium'] is not None
-        r = 'couponRate' in self.pricingParameters.keys() and self.pricingParameters['couponRate'] is not None
+        r = 'fixedCouponRate' in self.pricingParameters.keys() and self.pricingParameters['fixedCouponRate'] is not None
+        k = 'fixedKeyRatePremium' in self.pricingParameters.keys() and self.pricingParameters['fixedKeyRatePremium'] is not None
 
         # Если Тип расчета купонной выплаты — фиксированный:
         if self.couponType == COUPON_TYPE.FXD:
 
             # Необходимо задать одно из полей Z-СПРЕД, G-СПРЕД, ГРЯЗНАЯ ЦЕНА, ЧИСТАЯ ЦЕНА, СТАВКА КУПОНА:
-            if z and not g and not d and not c and not p and not r:
+            if z and not g and not d and not c and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_ZSPRD
                 self.zSpread = float(self.pricingParameters['zSpread'])
                 if not CONSTRAINTS.ZSPRD_MIN <= self.zSpread <= CONSTRAINTS.ZSPRD_MAX:
                     raise Exception(CONSTRAINTS.ZSPRD_EXCEP)
 
-            elif g and not z and not d and not c and not p and not r:
+            elif g and not z and not d and not c and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_GSPRD
                 self.gSpread = float(self.pricingParameters['gSpread'])
                 if not CONSTRAINTS.GSPRD_MIN <= self.gSpread <= CONSTRAINTS.GSPRD_MAX:
                     raise Exception(CONSTRAINTS.GSPRD_EXCEP)
 
-            elif d and not z and not g and not c and not p and not r:
+            elif d and not z and not g and not c and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_DIRTY
                 self.dirtyPrice = float(self.pricingParameters['dirtyPrice'])
                 if not CONSTRAINTS.DIRTY_MIN <= self.dirtyPrice <= CONSTRAINTS.DIRTY_MAX:
                     raise Exception(CONSTRAINTS.DIRTY_EXCEP)
 
-            elif c and not z and not g and not d and not p and not r:
+            elif c and not z and not g and not d and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_CLEAN
                 self.cleanPrice = float(self.pricingParameters['cleanPrice'])
                 if not CONSTRAINTS.CLEAN_MIN <= self.cleanPrice <= CONSTRAINTS.CLEAN_MAX:
                     raise Exception(CONSTRAINTS.CLEAN_EXCEP)
 
-            elif r and not z and not g and not d and not c and not p:
+            elif r and not z and not g and not d and not c and not p and not k:
                 # В том случае, если задана ставка купона, дата оценки автоматически становится равной дате размещения, а индикатор
                 # ипользования только доступной на дату оценки информации автоматически становится истинным:
                 self.pricingDate = self.issueDate
@@ -524,8 +538,8 @@ class Convention(object):
                 self.poolReportDate = self.deliveryDate
                 self.poolDownloadDate = self.deliveryDate
                 self.calculationType = CALCULATION_TYPE.SET_COUPN
-                self.couponRate = float(self.pricingParameters['couponRate'])
-                if not CONSTRAINTS.COUPN_MIN <= self.couponRate <= CONSTRAINTS.COUPN_MAX:
+                self.fixedCouponRate = float(self.pricingParameters['fixedCouponRate'])
+                if not CONSTRAINTS.COUPN_MIN <= self.fixedCouponRate <= CONSTRAINTS.COUPN_MAX:
                     raise Exception(CONSTRAINTS.COUPN_EXCEP)
 
             else:
@@ -534,24 +548,38 @@ class Convention(object):
         # Если Тип расчета купонной выплаты — плавающий:
         elif self.couponType == COUPON_TYPE.FLT:
 
-            # Необходимо задать одно из полей ТРЕБУЕМАЯ НАДБАВКА, ГРЯЗНАЯ ЦЕНА, ЧИСТАЯ ЦЕНА:
-            if p and not z and not g and not d and not c and not r:
+            # Необходимо задать одно из полей ТРЕБУЕМАЯ НАДБАВКА, ГРЯЗНАЯ ЦЕНА, ЧИСТАЯ ЦЕНА, ФАКТИЧЕСКАЯ НАДБАВКА:
+            if p and not z and not g and not d and not c and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_PREMI
                 self.requiredKeyRatePremium = float(self.pricingParameters['requiredKeyRatePremium'])
                 if not CONSTRAINTS.PREMI_MIN <= self.requiredKeyRatePremium <= CONSTRAINTS.PREMI_MAX:
                     raise Exception(CONSTRAINTS.PREMI_EXCEP)
 
-            elif d and not z and not g and not c and not p and not r:
+            elif d and not z and not g and not c and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_DIRTY
                 self.dirtyPrice = float(self.pricingParameters['dirtyPrice'])
                 if not CONSTRAINTS.DIRTY_MIN <= self.dirtyPrice <= CONSTRAINTS.DIRTY_MAX:
                     raise Exception(CONSTRAINTS.DIRTY_EXCEP)
 
-            elif c and not z and not g and not d and not p and not r:
+            elif c and not z and not g and not d and not p and not r and not k:
                 self.calculationType = CALCULATION_TYPE.SET_CLEAN
                 self.cleanPrice = float(self.pricingParameters['cleanPrice'])
                 if not CONSTRAINTS.CLEAN_MIN <= self.cleanPrice <= CONSTRAINTS.CLEAN_MAX:
                     raise Exception(CONSTRAINTS.CLEAN_EXCEP)
+
+            elif k and not z and not g and not d and not c and not p and not r:
+                # В том случае, если задана фактическая фиксированная надбавка к Ключевой ставке, дата оценки автоматически становится
+                # равной дате размещения, а индикатор ипользования только доступной на дату оценки информации
+                # автоматически становится истинным:
+                self.pricingDate = self.issueDate
+                self.usePricingDateDataOnly = True
+                self.poolReportDate = self.deliveryDate
+                self.poolDownloadDate = self.deliveryDate
+                self.calculationType = CALCULATION_TYPE.SET_FXPRM
+                self.fixedKeyRatePremium = float(self.pricingParameters['fixedKeyRatePremium'])
+                if not CONSTRAINTS.FXPRM_MIN <= self.fixedKeyRatePremium <= CONSTRAINTS.FXPRM_MAX:
+                    raise Exception(CONSTRAINTS.FXPRM_EXCEP)
+                self.fixedKeyRatePremium /= 100.0
 
             else:
                 raise Exception(EXCEPTIONS._3)
@@ -563,25 +591,25 @@ class Convention(object):
             # Z-СПРЕД, G-СПРЕД, ГРЯЗНАЯ ЦЕНА, ЧИСТАЯ ЦЕНА:
             if self.poolType == POOL_TYPE.FXD:
 
-                if z and not g and not d and not c and not p and not r:
+                if z and not g and not d and not c and not p and not r and not k:
                     self.calculationType = CALCULATION_TYPE.SET_ZSPRD
                     self.zSpread = float(self.pricingParameters['zSpread'])
                     if not CONSTRAINTS.ZSPRD_MIN <= self.zSpread <= CONSTRAINTS.ZSPRD_MAX:
                         raise Exception(CONSTRAINTS.ZSPRD_EXCEP)
 
-                elif g and not z and not d and not c and not p and not r:
+                elif g and not z and not d and not c and not p and not r and not k:
                     self.calculationType = CALCULATION_TYPE.SET_GSPRD
                     self.gSpread = float(self.pricingParameters['gSpread'])
                     if not CONSTRAINTS.GSPRD_MIN <= self.gSpread <= CONSTRAINTS.GSPRD_MAX:
                         raise Exception(CONSTRAINTS.GSPRD_EXCEP)
 
-                elif d and not z and not g and not c and not p and not r:
+                elif d and not z and not g and not c and not p and not r and not k:
                     self.calculationType = CALCULATION_TYPE.SET_DIRTY
                     self.dirtyPrice = float(self.pricingParameters['dirtyPrice'])
                     if not CONSTRAINTS.DIRTY_MIN <= self.dirtyPrice <= CONSTRAINTS.DIRTY_MAX:
                         raise Exception(CONSTRAINTS.DIRTY_EXCEP)
 
-                elif c and not z and not g and not d and not p and not r:
+                elif c and not z and not g and not d and not p and not r and not k:
                     self.calculationType = CALCULATION_TYPE.SET_CLEAN
                     self.cleanPrice = float(self.pricingParameters['cleanPrice'])
                     if not CONSTRAINTS.CLEAN_MIN <= self.cleanPrice <= CONSTRAINTS.CLEAN_MAX:
@@ -850,6 +878,7 @@ class Convention(object):
         self.historicalCDR = None
         self.conventionalCDR = None
         self.modelCDR = None
+        self.deliveryMonths = None
 
         if self.runCashflowModel:
 
@@ -872,7 +901,7 @@ class Convention(object):
             # ----- ОПОРНАЯ ДАТА МОДЕЛИ КЛЮЧЕВОЙ СТАВКИ ---------------------------------------------------------------------------------- #
             # Дата, по состоянию на которую производится расчет ожидаемой траектории Ключевой ставки:
             if self.usePricingDateDataOnly:
-                self.keyRateModelDate = self.pricingDate
+                self.keyRateModelDate = min(self.pricingDate, np.datetime64('today'))
             else:
                 self.keyRateModelDate = np.datetime64('today')
 
@@ -881,7 +910,9 @@ class Convention(object):
 
             # ----- ДАТА ПАРАМЕТРОВ S-КРИВЫХ ДЛЯ РАСЧЕТА --------------------------------------------------------------------------------- #
             if self.usePricingDateDataOnly:
-                date_a_1 = (self.pricingDate - self.poolDataDelay).astype(m_type).astype(d_type)
+                date_a_1 = (self.pricingDate - self.poolDataDelay + self.ifrs * day).astype(m_type).astype(d_type)
+                # ("self.ifrs * day" добавляется для того, чтобы в случае расчета по требованиям МСФО на Дату оценки, например, 31.03.2024
+                # использовались данные на 01.04.2024)
                 date_a_2 = self.sCurvesParameters['reportDate'].values.max().astype(d_type)
                 date_a = min(date_a_1, date_a_2)
                 date_b = self.sCurvesParameters['reportDate'].values.min().astype(d_type)
@@ -924,6 +955,12 @@ class Convention(object):
             else:
                 self.modelCDR = self.conventionalCDR
             self.modelCDR = np.round(self.modelCDR, 1)
+
+            # ----- КОЛИЧЕСТВО МЕСЯЦЕВ С ДАТЫ ПЕРЕДАЧИ ----------------------------------------------------------------------------------- #
+            # Количество полных месяцев, которое прошло между Датой передачи и Датой среза ипотечного покрытия для расчета. Необходимо для
+            # того, чтобы учесть, что на Дату передачи в ипотечном покрытии нет кредитов с просроченной задолженностью, из-за чего первые
+            # три месяца после после месяца, на который приходится дата передачи, в ипотечном покрытии не будет дефолтов:
+            self.deliveryMonths = int(np.floor((self.poolReportDate - self.deliveryDate) / day / 30.5))
 
         ####################################################################################################################################
 
@@ -1022,11 +1059,13 @@ class Convention(object):
                                                          key_rate_model_data=self.keyRateModelData,
                                                          s_curves=self.calculationSCurvesParameters,
                                                          cdr=self.modelCDR,
+                                                         cpr=self.cpr,
                                                          ifrs=self.ifrs,
+                                                         no_cdr_months=[0, max(0, 3 - self.deliveryMonths)],
                                                          reinvestment=self.reinvestment,
                                                          stop_date=self.poolCashflowEndDate,
-                                                         progress_bar=self.progressBar,
                                                          key_rate_forecast=self.keyRateForecast,
+                                                         progress_bar=self.progressBar,
                                                          connection_id=self.connectionId,
                                                          current_percent=self.currentPercent,
                                                          status_delta=self.statusDelta)
@@ -1161,6 +1200,7 @@ class Convention(object):
 
             # Модель денежного потока по ипотечному покрытию запускается только на восстанавливаемый месяц:
             report_date = self.mbsModel['total']['pool']['reportDate'].values[i].astype(d_type)
+            delivery_months = int(np.floor((report_date - self.deliveryDate) / day / 30.5))
             stop_date = (report_date.astype(m_type) + month).astype(d_type) - day
             pool_model = loansCashflowModel(bond_id=self.bondID,
                                             report_date=report_date,
@@ -1168,11 +1208,13 @@ class Convention(object):
                                             key_rate_model_data=self.keyRateModelData,
                                             s_curves=self.calculationSCurvesParameters,
                                             cdr=self.modelCDR,
+                                            cpr=self.cpr,
                                             ifrs=self.ifrs,
+                                            no_cdr_months=[0, max(0, 3 - delivery_months)],
                                             reinvestment=self.reinvestment,
                                             stop_date=stop_date,
-                                            progress_bar=self.progressBar,
                                             key_rate_forecast=self.keyRateForecast,
+                                            progress_bar=self.progressBar,
                                             connection_id=self.connectionId,
                                             current_percent=self.currentPercent,
                                             status_delta=self.statusDelta)
@@ -1222,7 +1264,7 @@ class Convention(object):
 
                 # Проверка восстановленных данных на валидность:
                 if self.mbsModel[part]['pool']['debt'].values[i] < self.mbsModel[part]['pool']['debt'].values[i + 1]:
-                    raise Exception(EXCEPTIONS._11)
+                    raise Exception(EXCEPTIONS._12)
 
                 # Фактическая амортизация за месяц:
                 self.mbsModel[part]['pool'].loc[i, 'amortization'] = np.round(self.mbsModel[part]['pool']['debt'].values[i] -
@@ -1355,17 +1397,22 @@ class Convention(object):
                     self.mbsModel[part]['inflow'].loc[0, 'difference'] = dif
                     self.mbsModel[part]['inflow'].loc[0, 'amortization'] += dif
 
-            # В том случае, если облигаций разместили на сумму меньшую, чем сумма остатков основного долга в ипотечном покрытии, то
-            # находящиеся у ипотечного агента "излишние" средства будут возвращены банку-оригинатору и не будут направлены на
-            # погашение выпуска (речь только об амортизации, процентные поступления все равно будут направлены в первый купон):
+            # В том случае, если облигаций разместили на сумму меньшую, чем сумма остатков основного долга в ипотечном покрытии на дату
+            # передачи, то находящиеся у ипотечного агента "излишние" средства от погашения кредитов будут возвращены банку-оригинатору
+            # и не будут направлены на погашение выпуска (речь только об амортизации, процентные поступления все равно будут направлены
+            # в первый купон):
             else:
 
                 for part, dif in zip(self.mbsModel.keys(), [dif_total, dif_fixed, dif_float]):
+
                     amt = self.mbsModel[part]['inflow']['amortization'].values[0]
                     prp = self.mbsModel[part]['inflow']['prepayment'].values[0]
                     dft = self.mbsModel[part]['inflow']['defaults'].values[0]
 
                     fraction = (amt + dif) / amt if amt > 0 else 0.0
+
+                    if amt + dif < 0.0:
+                        raise Exception(EXCEPTIONS._13.format(str(np.round(abs(dif / 1000000), 0)), str(np.round(amt / 1000000, 0))))
 
                     self.mbsModel[part]['inflow'].loc[0, 'amortization'] += dif
                     self.mbsModel[part]['inflow'].loc[0, 'defaults'] = np.round(dft * fraction, 2)
@@ -1739,8 +1786,6 @@ class Convention(object):
 
             # Технические переменные для последующего расчета:
             coupon_rate = self.fixedCouponRate
-            if self.calculationType == CALCULATION_TYPE.SET_COUPN:
-                coupon_rate = self.couponRate
             bond_principals = self.mbsModel['total']['bond']['principalStartPeriod'].astype(float).values
             coupon_days = self.mbsModel['total']['bond']['couponPeriodDays'].astype(float).values
 
@@ -2018,7 +2063,7 @@ class Convention(object):
             df = self.dfZCYCPlusZ(self.requiredKeyRatePremium, t_future)
             self.dirtyPrice = 100.0 + ((prem_act - prem_req) * df).sum() / self.currentBondPrincipal * 100.0 + self.accruedCouponInterest
 
-        elif self.calculationType == CALCULATION_TYPE.SET_COUPN:
+        elif self.calculationType == CALCULATION_TYPE.SET_COUPN or self.calculationType == CALCULATION_TYPE.SET_FXPRM:
             self.dirtyPrice = 100.0
 
         elif self.calculationType == CALCULATION_TYPE.SET_Z_PRM:
@@ -2110,6 +2155,9 @@ class Convention(object):
 
                 premium = minimize(lambda prm: (prem_req_price(prm) - self.dirtyPrice) ** 2.0, np.array([100.0]), method='Nelder-Mead').x[0]
                 self.requiredKeyRatePremium = premium
+
+            elif self.calculationType == CALCULATION_TYPE.SET_FXPRM:
+                self.requiredKeyRatePremium = self.fixedKeyRatePremium
 
             elif self.calculationType == CALCULATION_TYPE.SET_PREMI:
                 pass
@@ -2259,6 +2307,7 @@ class Convention(object):
 
         self.pricingParameters['pricingDate'] = str(self.pricingDate.astype(s_type))
         self.pricingParameters['usePricingDateDataOnly'] = self.usePricingDateDataOnly
+        self.pricingParameters['cpr'] = self.cpr
         self.pricingParameters['cdr'] = self.modelCDR
         self.pricingParameters['zcycDateTime'] = str(self.zcycParameters['date'])
         self.pricingParameters['zcycParameters'] = self.zcycParameters
@@ -2349,9 +2398,10 @@ class Convention(object):
                 # — wac — средневзвешення по остаткам основного долга текущая процентная ставка в ипотечном покрытии на reportDate:
                 pool_cf['wac'] = np.round(base_cf['wac'].values, 5)
 
-                pool_cf['amortizationIFRS'] = 0.0
-                pool_cf['yieldIFRS'] = 0.0
                 if self.ifrs:
+
+                    pool_cf['amortizationIFRS'] = 0.0
+                    pool_cf['yieldIFRS'] = 0.0
 
                     # — amortizationIFRS — сумма всех перенесенных с прошлого месяца (относительно paymentMonth) погашений основного долга:
                     pool_cf['amortizationIFRS'] = np.round(base_cf['amortizationIFRS'].fillna(0.0).values, 2)
@@ -2554,7 +2604,7 @@ class Convention(object):
             # Средневзвешенный по модельным суммам остатков основного долна в ипотечном покрытии CPR на протяжении обращения
             # выпуска облигаций:
             cpr, dbt = self.cprGraph['cpr'].values, self.cprGraph['debt'].values
-            self.modelCPR = np.round(np.nansum(cpr * dbt) / np.nansum(dbt), 5)
+            self.modelCPR = np.round(np.nansum(cpr * dbt) / np.nansum(dbt), 1 if self.rounding else self.roundingPrecision)
             self.cprGraph['wac'].bfill(inplace=True)
 
             self.cprGraph = self.cprGraph[['date', 'key_rate', 'ref_rate', 'cpr', 'wac']]
