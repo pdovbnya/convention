@@ -101,8 +101,9 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             4.8. Размер процентных поступлений (с учетом недополучения процентов при полном досрочном погашении и выкупе дефолта) [рубли]
 
     5. Объединение (суммирование) денежных потоков по кредитам в совокупный помесячный денежный поток по ипотечному покрытию, а также
-       отдельно в помесячный денежный поток по ипотечному покрытию в части кредитов без субсидий и отдельно в помесячный денежный поток
-       по ипотечному покрытию в части кредитов с субсидиями
+       отдельно в помесячный денежный поток по ипотечному покрытию в фиксированной части и отдельно в помесячный денежный поток по ипотеч-
+       ному покрытию в плавающей части. В фиксированную часть входят кредиты без субсидий, а также несубсидируемые доли частично субсиди-
+       руемых кредитов. В плавающую входят полностью субсидируемые кредиты, а также субсидируемые доли частично субсидируемых кредитов
 
     ----------------------------------------------------------------------------------------------------------------------------------------
 
@@ -157,8 +158,9 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     current_rates = np.array(poolData['currentRate']).astype(float)  # ТЕКУЩАЯ ПРОЦЕНТНАЯ СТАВКА ПО КРЕДИТУ (% ГОДОВЫХ)
     payment_types = np.array(poolData['paymentType']).astype(int)  # ТИП ПЛАТЕЖА ПО КРЕДИТУ (0 - АННУИТЕТНЫЙ, 1 - ДИФФ.)
     start_days = np.array(poolData['startInterestDay']).astype(int)  # ДЕНЬ НАЧАЛА ПРОЦЕНТНОГО ПЕРИОДА ПО КРЕДИТУ (ОТ 1 ДО 31)
-    govern_program_type = poolData['governProgramType']  # ГОС. ПРОГРАММА ПО КРЕДИТУ (NONE/1/2/3/4/5)
-    key_rate_deduction = np.array(poolData['keyRateDeduction']).astype(float)  # ВЫЧЕТ ДЛЯ РАСЧЕТА СУБСИДИИ ПО КРЕДИТУ (П.П)
+    govern_program_types = poolData['governProgramType']  # ГОС. ПРОГРАММА ПО КРЕДИТУ (NONE/1/2/3/4/5)
+    key_rate_deductions = np.array(poolData['keyRateDeduction']).astype(float)  # ВЫЧЕТ ДЛЯ РАСЧЕТА СУБСИДИИ ПО КРЕДИТУ (П.П)
+    subsidy_coefficients = np.array(poolData['subsidyCoefficient']).astype(float)  # СУБСИДИРУЕМАЯ ДОЛЯ ОСНОВНОГО ДОЛГА (%)
 
     # Количество кредитов в ипотечном покрытии:
     n = len(current_debts)
@@ -175,13 +177,22 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
     # В том случае, если у поля governProgramType все значения для всех кредитов одинаковые, метод GetPoolsData возвращает массив из одного
     # значения. Если это так, необходимо явно задать тип гос. программы для каждого кредита:
-    if len(govern_program_type) < n and len(govern_program_type) == 1:
-        govern_program_type = np.array([govern_program_type[0]] * n)
+    if len(govern_program_types) < n and len(govern_program_types) == 1:
+        govern_program_types = np.array([govern_program_types[0]] * n)
 
     # В том случае, если у поля keyRateDeduction все значения для всех кредитов одинаковые, метод GetPoolsData возвращает массив из одного
-    # значения. Если это так, необходимо явно задать тип гос. программы для каждого кредита:
-    if len(key_rate_deduction) < n and len(key_rate_deduction) == 1:
-        key_rate_deduction = np.array([key_rate_deduction[0]] * n)
+    # значения. Если это так, необходимо явно задать значение вычета для каждого кредита:
+    if len(key_rate_deductions) < n and len(key_rate_deductions) == 1:
+        key_rate_deductions = np.array([key_rate_deductions[0]] * n)
+
+    # В том случае, если у поля subsidyCoefficient все значения для всех кредитов одинаковые, метод GetPoolsData возвращает массив из одного
+    # значения. Если это так, необходимо явно задать значение субсидируемой доли для каждого кредита:
+    if len(subsidy_coefficients) < n and len(subsidy_coefficients) == 1:
+        subsidy_coefficients = np.array([subsidy_coefficients[0]] * n)
+
+    # Для удобства дальнейшего расчета для кредитов без субсидий указываем, что их субсидируемая доля равна нулю, а также делим на 100.0:
+    subsidy_coefficients[np.isnan(subsidy_coefficients)] = 0.0
+    subsidy_coefficients /= 100.0
 
     # Максимальная дата погашения кредита определяется как максимальная дата среди текущих дат погашений кредита по кредитам, у которых
     # остаток основного долга больше нуля:
@@ -208,49 +219,49 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             initial_stop_date = copy.deepcopy(stop_date)
             stop_date = (stop_date.astype(m_type) + 2 * month).astype(d_type) - day
 
-    # Тип ипотечного покрытия:
-    fxd = np.array(govern_program_type) == None
-    flt = np.array(govern_program_type) != None
-
-    fxd_inside = fxd.any()
-    flt_inside = flt.any()
-
+    # Тип ипотечного покрытия
+    # С точки зрения формирования процентных поступлений кредиты в ипотечном покрытии могут быть трех типов:
+    #   1. Кредиты без субсидий — стандартные кредиты с фиксированной процентной ставкой
+    #   2. Полностью субсидируемые кредиты — субсидируемые в рамках какой-либо гос. программы кредиты, у которых плавающая ставка субсидии
+    #      начисляется на весь остаток основного долга
+    #   3. Частично субсидируемые кредиты — субсидируемые в рамках какой-либо гос. программы кредиты, у которых плавающая ставка субсидии
+    #      начисляется на фиксированную долю остатка основного долга
+    #
+    # Ипотечное покрытие может быть сформировано из двух разных с финансовой точки зрения частей — фиксированной и плавающей.
+    # В фиксированную часть входят кредиты без субсидий, а также несубсидируемые доли частично субсидируемых кредитов.
+    # В плавающую входят полностью субсидируемые кредиты, а также субсидируемые доли частично субсидируемых кредитов
     poolType = None
-    if fxd_inside and not flt_inside:
-        poolType = POOL_TYPE.FXD  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 1: СТАНДАРТНЫЙ (ВСЕ КРЕДИТЫ БЕЗ СУБСИДИЙ)
-    elif not fxd_inside and flt_inside:
-        poolType = POOL_TYPE.FLT  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 2: СУБСИДИРОВАННЫЙ (ВСЕ КРЕДИТЫ С СУБСИДИЯМИ)
+    if (subsidy_coefficients == 0.0).all():
+        poolType = POOL_TYPE.FXD  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 1: СТАНДАРТНОЕ (ТОЛЬКО ФИКСИРОВАННАЯ ЧАСТЬ)
+    elif (subsidy_coefficients == 1.0).all():
+        poolType = POOL_TYPE.FLT  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 2: СУБСИДИРУЕМОЕ (ТОЛЬКО ПЛАВАЮЩАЯ ЧАСТЬ)
     else:
-        poolType = POOL_TYPE.MIX  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 3: СМЕШАННЫЙ (ЧАСТЬ КРЕДИТОВ С СУБСИДИЯМИ, ЧАСТЬ БЕЗ СУБСИДИЙ)
+        poolType = POOL_TYPE.MIX  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 3: СМЕШАННОЕ (ЕСТЬ КАК ФИКСИРОВАННАЯ, ТАК И ПЛАВАЮЩАЯ ЧАСТЬ)
 
     # Сумма остатков основного долга в ипотечном покрытии:
     debt = np.round(np.sum(current_debts), 2)
 
-    # Сумма остатков основного долга в ипотечном покрытии по кредитам без субсидий (fxd_debt) и по кредитам с субсидиями (flt_debt):
-    fxd_debt = np.round(np.sum(current_debts[fxd]), 2) if fxd_inside else None
-    if fxd_debt is not None:
-        flt_debt = np.round(debt - fxd_debt, 2) if flt_inside else None
-    else:
-        flt_debt = debt
+    # Сумма остатков основного долга в ипотечном покрытии по стандартной части (fxd_debt) и по субсидируемой части (flt_debt):
+    fxd_debt = np.round(np.sum(current_debts * (1.0 - subsidy_coefficients)), 2)
+    flt_debt = np.round(debt - fxd_debt, 2)
 
-    # Доля в ипотечном покрытии кредитов без субсидий (fxd_fraction) и кредитов с субсидиями (flt_fraction):
-    fxd_fraction, flt_fraction = None, None
+    # Доля фиксированной части (fxd_fraction) и доля плавающей части (flt_fraction):
+    fxd_fraction, flt_fraction = 0.0, 0.0
     if poolType is POOL_TYPE.FXD:
         fxd_fraction = 100.0
     elif poolType is POOL_TYPE.FLT:
         flt_fraction = 100.0
     elif poolType is POOL_TYPE.MIX:
         fxd_fraction = np.round(fxd_debt / debt * 100.0, 2)
-        flt_fraction = np.round(100.0 - fxd_fraction, 2) if flt_inside else None
+        flt_fraction = np.round(100.0 - fxd_fraction, 2)
 
     # Статистика ипотечного покрытия. Значение каждой статистики (кроме reportDate и poolType) указывается отдельно для всего ипотечного
-    # покрытия (total), для кредитов без субсидий (fixed) и для кредитов с субсидиями (float):
+    # покрытия (total), для фиксированной части (fixed) и для стандартной части (float):
     stats = {
         'reportDate': str(reportDate.astype(s_type)),  # дата среза ипотечного покрытия
         'poolType': poolType,  # тип ипотечного покрытия
         'poolDebt': {'total': None, 'fixed': None, 'float': None},  # сумма остатков основного долга
         'poolFraction': {'total': None, 'fixed': None, 'float': None},  # доля в терминах остатков основного долга
-        'loansNumber': {'total': None, 'fixed': None, 'float': None},  # количество кредитов
         'wac': {'total': None, 'fixed': None, 'float': None},  # средневзвешенная процентная ставка (WAC)
         'wala': {'total': None, 'fixed': None, 'float': None},  # средневзвешенная выдержка (WALA)
         'wam': {'total': None, 'fixed': None, 'float': None},  # средневзвешенный срок до погашения (WAM)
@@ -260,33 +271,31 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
     stats['poolDebt']['total'] = debt
     stats['poolFraction']['total'] = None
-    stats['loansNumber']['total'] = n
     stats['wac']['total'] = np.round(np.sum(current_rates * current_debts) / debt, 2)
     stats['wala']['total'] = np.round(np.sum((reportDate - issue_dates) / day / 365.0 * current_debts) / debt, 1)
     stats['wam']['total'] = np.round(np.sum((maturity_dates - reportDate) / day / 365.0 * current_debts) / debt, 1)
     stats['keyRateDeduction']['total'] = None
     stats['keyRatePremium']['total'] = None
 
-    if fxd_inside:
+    if fxd_fraction > 0.0:
+        coeffs = (1.0 - subsidy_coefficients)
         stats['poolDebt']['fixed'] = fxd_debt
         stats['poolFraction']['fixed'] = fxd_fraction
-        stats['loansNumber']['fixed'] = int(fxd.sum())
-        stats['wac']['fixed'] = np.round(np.sum(current_rates[fxd] * current_debts[fxd]) / fxd_debt, 2)
-        stats['wala']['fixed'] = np.round(np.sum((reportDate - issue_dates[fxd]) / day / 365.0 * current_debts[fxd]) / fxd_debt, 1)
-        stats['wam']['fixed'] = np.round(np.sum((maturity_dates[fxd] - reportDate) / day / 365.0 * current_debts[fxd]) / fxd_debt, 1)
+        stats['wac']['fixed'] = np.round(np.sum(current_rates * current_debts * coeffs) / fxd_debt, 2)
+        stats['wala']['fixed'] = np.round(np.sum((reportDate - issue_dates) / day / 365.0 * current_debts * coeffs) / fxd_debt, 1)
+        stats['wam']['fixed'] = np.round(np.sum((maturity_dates - reportDate) / day / 365.0 * current_debts * coeffs) / fxd_debt, 1)
         stats['keyRateDeduction']['fixed'] = None
         stats['keyRatePremium']['fixed'] = None
 
-    if flt_inside:
+    if flt_fraction > 0.0:
+        coeffs = subsidy_coefficients
         stats['poolDebt']['float'] = flt_debt
         stats['poolFraction']['float'] = flt_fraction
-        stats['loansNumber']['float'] = int(flt.sum())
-        stats['wac']['float'] = np.round(np.sum(current_rates[flt] * current_debts[flt]) / flt_debt, 2)
-        stats['wala']['float'] = np.round(np.sum((reportDate - issue_dates[flt]) / day / 365.0 * current_debts[flt]) / flt_debt, 1)
-        stats['wam']['float'] = np.round(np.sum((maturity_dates[flt] - reportDate) / day / 365.0 * current_debts[flt]) / flt_debt, 1)
-        stats['keyRateDeduction']['float'] = np.round(np.sum(key_rate_deduction[flt] * current_debts[flt]) / flt_debt, 2)
-        stats['keyRatePremium']['float'] = np.round(np.sum((current_rates[flt] + key_rate_deduction[flt]) * current_debts[flt]) / flt_debt,
-                                                    2)
+        stats['wac']['float'] = np.round(np.sum(current_rates * current_debts * coeffs) / flt_debt, 2)
+        stats['wala']['float'] = np.round(np.sum((reportDate - issue_dates) / day / 365.0 * current_debts * coeffs) / flt_debt, 1)
+        stats['wam']['float'] = np.round(np.sum((maturity_dates - reportDate) / day / 365.0 * current_debts * coeffs) / flt_debt, 1)
+        stats['keyRateDeduction']['float'] = np.round(np.nansum(key_rate_deductions * current_debts * coeffs) / flt_debt, 2)
+        stats['keyRatePremium']['float'] = np.round(np.nansum((current_rates + key_rate_deductions) * current_debts * coeffs) / flt_debt, 2)
 
     # ------------------------------------------------------------------------------------------------------------------------------------ #
     # ----- ЗАПУСК МОДЕЛИ КЛЮЧЕВОЙ СТАВКИ И СТАВКИ РЕФИНАНСИРОВАНИЯ ИПОТЕКИ -------------------------------------------------------------- #
@@ -636,8 +645,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     # последний денежный поток по ипотечному покрытию:
     pay_months = np.arange(reportDate.astype(m_type), reportDate.astype(m_type) + len(amt)).astype(m_type)
 
-    # Поток по ипотечному покрытию формируется отдельно для части кредитов без субсидий (с фиксированной ставкой) и отдельно для части
-    # кредитов с субсидиями (с плавающей ставкой):
+    # Поток по ипотечному покрытию формируется отдельно для фиксированной части и отдельной для плавающей части:
 
     fxd_amt, flt_amt = None, None
     fxd_yld, flt_yld = None, None
@@ -647,18 +655,18 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     flt_fraction = None
 
     poolModel = {
-        'fixed': None,  # Модельный помесячный денежный поток по ипотечному покрытию в части кредитов без субсидий
-        'float': None,  # Модельный помесячный денежный поток по ипотечному покрытию в части кредитов с субсидиями
-        'total': None,  # Модельный помесячный денежный поток по всему ипотечному покрытию
+        'total': None,  # модельный помесячный денежный поток по всему ипотечному покрытию
+        'fixed': None,  # модельный помесячный денежный поток по фиксированной части ипотечного покрытия
+        'float': None,  # модельный помесячный денежный поток по плавающей части ипотечного покрытия
     }
 
     TEST_2, TEST_3 = None, None
 
-    # Модельный денежный поток по кредитам в ипотечно покрытии по месяцам.
-    # Независимо от типа ипотечного покрытия, денежные потоки задаются явно по части кредитов без субсидий и по части кредитов с субсидиями.
+    # Модельный денежный поток по кредитам в ипотечном покрытии по месяцам.
+    # Независимо от типа ипотечного покрытия, денежные потоки задаются явно по фиксированной части и по плавающей части.
     # Если, например, в ипотечном покрытии нет кредитов с субсидиями, то таблица денежного потока 'float' будет содеражить нули.
-    # Соответственно, если в ипотечном покрытии только кредиты с субсидиями, то таблица денежного потока 'fixed' будет содержать нули.
-    for part, loans in zip(['fixed', 'float'], [fxd, flt]):
+    # Соответственно, если в покрытии только полностью субсидируемые кредиты, то таблица денежного потока 'fixed' будет содержать нули.
+    for part, coeffs in zip(['fixed', 'float'], [(1.0 - subsidy_coefficients), subsidy_coefficients]):
 
         poolModel[part] = {
             'debt': None,
@@ -667,15 +675,15 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             'reinvestment': None,
         }
 
-        part_debt = np.round(current_debts[loans].sum(), 2)
-        part_amt = np.nansum(amt[:, loans], axis=1)
-        part_yld = np.nansum(yld[:, loans], axis=1)
-        part_amt_cpr = np.nansum(amt_cpr[:, loans], axis=1)
-        part_amt_cdr = np.nansum(amt_cdr[:, loans], axis=1)
+        part_debt = np.round(np.sum(current_debts * coeffs), 2)
+        part_amt = np.nansum(amt * coeffs, axis=1)
+        part_yld = np.nansum(yld * coeffs, axis=1)
+        part_amt_cpr = np.nansum(amt_cpr * coeffs, axis=1)
+        part_amt_cdr = np.nansum(amt_cdr * coeffs, axis=1)
 
-        part_model_cpr = np.nansum(start_debts[:, loans] * cpr[:, loans], axis=1) / np.nansum(start_debts[:, loans], axis=1)
+        part_model_cpr = np.nansum(start_debts * coeffs * cpr, axis=1) / np.nansum(start_debts * coeffs, axis=1)
 
-        poolModel[part]['accruedYield'] = np.round(np.nansum(accrued_yld[loans]), 2)
+        poolModel[part]['accruedYield'] = np.round(np.nansum(accrued_yld * coeffs), 2)
         poolModel[part]['debt'] = part_debt
         poolModel[part]['cashflow'] = pd.DataFrame(
             {
@@ -718,7 +726,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             if poolData['currentDebtIFRS'] != [None]:
 
                 current_debts_ifrs = np.array(poolData['currentDebtIFRS']).astype(float)
-                part_debt_ifrs = np.round(np.sum(current_debts_ifrs[loans]), 2)
+                part_debt_ifrs = np.round(np.sum(current_debts_ifrs * coeffs), 2)
                 part_amt_ifrs = np.round(part_debt_ifrs - part_debt, 2)
 
                 if part_amt_ifrs > 1.0:
@@ -726,7 +734,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
                     # Определяем кредиты, у которых произошел перенос платежа в следующий месяц:
                     difference = current_debts_ifrs - current_debts
-                    transfer = loans & (difference > 1.0)
+                    transfer = difference > 1.0
 
                     prev_month = (reportDate.astype(m_type) - month)
                     prev_month_year = prev_month.astype(y_type)
@@ -734,7 +742,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
                     days_in_year = ((prev_month_year + year).astype(d_type) - prev_month_year.astype(d_type)) / day
                     period_delta = days_in_month / days_in_year
 
-                    part_yield_ifrs = np.round(np.sum(current_debts_ifrs[transfer] * current_rates[transfer] / 100.0 * period_delta), 2)
+                    part_yield_ifrs = np.round(np.sum(current_debts_ifrs * current_rates * coeffs * transfer / 100.0 * period_delta), 2)
                     poolModel[part]['cashflow'].loc[0, 'yieldIFRS'] = part_yield_ifrs
 
         # Сумма остатков основного долга по кредитам на начало месяца:
@@ -744,13 +752,13 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
         # WAC ипотечного покрытия на начало месяца:
         poolModel[part]['cashflow']['wac'] = np.nan
-        if loans.any():
+        if coeffs.sum() > 0.0:
             # В первой строчке start_debts необходимо заполнить все пробелы, чтобы затем корректно считать средневзвешенные показатели:
             nan_debts = np.isnan(start_debts[0, :])
             start_debts[0, nan_debts] = start_debts[1, nan_debts]
             # Первая строка start_debts показывает остатки основного долга на reportDate, вторая — на 1 число месяца, след. за месяцем
             # reportDate и т.д.
-            wac = np.nansum(start_debts[:, loans] * current_rates[loans], axis=1) / np.nansum(start_debts[:, loans], axis=1)
+            wac = np.nansum(start_debts * current_rates * coeffs, axis=1) / np.nansum(start_debts * coeffs, axis=1)
             length = len(poolModel[part]['cashflow'])
             poolModel[part]['cashflow']['wac'] = np.round(wac[:length], 5)
 
@@ -762,16 +770,16 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
         poolModel[part]['cashflow']['waKeyRateDeduction'] = np.nan
         poolModel[part]['cashflow']['subsidy'] = 0.0
-        if part == 'float' and loans.any():
+        if part == 'float' and coeffs.sum() > 0.0:
             # В том случае, если в ипотечном покрытии есть субсидируемые кредиты, необходимо произвести расчет субсидий.
             # wa_deduction — среднезвзвешенный вычет на начало каждого месяца (первое значение — на reportDate)
-            wa_deduction = np.nansum(start_debts[:, loans] * key_rate_deduction[loans], axis=1) / np.nansum(start_debts[:, loans], axis=1)
+            wa_deduction = np.nansum(start_debts * key_rate_deductions * coeffs, axis=1) / np.nansum(start_debts * coeffs, axis=1)
             length = len(poolModel[part]['cashflow'])
             poolModel[part]['cashflow']['waKeyRateDeduction'] = np.round(wa_deduction[:length], 5)
 
             # Рассчитываем размер начисленной субсидии за каждый месяц paymentMonth:
-            subsidy_rates = poolModel[part]['cashflow']['keyRate'].values.reshape(-1, 1) + key_rate_deduction[loans]
-            subsidy_values = yld[:, loans] / (current_rates[loans] / 100.0) * (subsidy_rates / 100.0)
+            subsidy_rates = poolModel[part]['cashflow']['keyRate'].values.reshape(-1, 1) + key_rate_deductions
+            subsidy_values = yld * coeffs / (current_rates / 100.0) * (subsidy_rates / 100.0)
             poolModel[part]['cashflow']['subsidy'] = saferound(np.nansum(subsidy_values, axis=1), 2)
 
         # Удаление лишних строк:
@@ -784,9 +792,9 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
         if reinvestment:
 
             # Развертывание таблиц end_dates, amt, yld в одну колонку:
-            part_end_dates = np.ravel(end_dates[:, loans], 'F')
-            part_amt_base = np.ravel(amt_base[:, loans], 'F')
-            part_yld_base = np.ravel(yld_base[:, loans], 'F')
+            part_end_dates = np.ravel(end_dates, 'F')
+            part_amt_base = np.ravel(amt_base * coeffs, 'F')
+            part_yld_base = np.ravel(yld_base * coeffs, 'F')
 
             # Таблица поступлений на счет Ипотечного агента из различных источников по дням:
             poolModel[part]['reinvestment'] = pd.DataFrame({'date': part_end_dates,
@@ -796,7 +804,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             # Добавление поступлений по субсидиям:
             poolModel[part]['reinvestment']['subsidy'] = 0.0
             poolModel[part]['reinvestment']['subsidyAccrualMonth'] = d_nat
-            if part == 'float' and loans.any():
+            if part == 'float' and coeffs.sum() > 0.0:
 
                 # Техническая коррекция:
                 part_cashflow = poolModel[part]['cashflow'].copy(deep=True)

@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 ifrs = False
 # ifrs = True
 
-# Путь для сохранения эксель-файла с результатом расчета (изменить на пользовательский!):
+# TODO! Путь для сохранения эксель-файла с результатом расчета (изменить на пользовательский!):
 save_path = r"C:\Users\pavel.dovbnya\Desktop\calculation_result.xlsx"
 
 # Параметры расчетов. С помощью комментирования строк можно оставить только интересуемые выпуски ИЦБ ДОМ.РФ:
@@ -47,6 +47,7 @@ for calculation in calculations:
     if res['poolStatistics'] is not None:
         rslt['poolReportDate'] = res['poolStatistics']['reportDate']
     rslt['zcycDateTime'] = res['pricingParameters']['zcycDateTime']
+    rslt['modelCPR'] = res['calculationParameters']['modelCPR']
     rslt['poolModelCPR'] = res['calculationParameters']['poolModelCPR']
     # — ожидаемый денежный поток по ипотечному покрытию:
     empty = pd.DataFrame([])
@@ -108,8 +109,8 @@ name = r'\TEMPLATE_IFRS.xlsx' if ifrs else r'\TEMPLATE.xlsx'
 wb = openpyxl.load_workbook(os.getcwd() + name)
 export_table(wb["Оценка"], rslt_cf, 2)
 export_table(wb["Все кредиты"], pool_cf_total, 2)
-export_table(wb["Кредиты без субсидий"], pool_cf_fixed, 2)
-export_table(wb["Кредиты с субсидиями"], pool_cf_float, 2)
+export_table(wb["Фиксированная часть"], pool_cf_fixed, 2)
+export_table(wb["Плавающая часть"], pool_cf_float, 2)
 export_table(wb["Формирование субсидий"], subs_cf, 2)
 export_table(wb["ИЦБ"], bond_cf, 2)
 if ifrs:

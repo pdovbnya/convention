@@ -8,6 +8,8 @@ import math
 import numpy as np
 import pandas as pd
 import time
+import asyncio
+import threading
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
 from requests import post
@@ -15,6 +17,11 @@ from requests import post
 import warnings
 warnings.filterwarnings('ignore')
 np.seterr(all='ignore')
+
+import logging
+
+logger = logging.getLogger('logger')
+
 
 s_type = 'datetime64[s]'
 d_type = 'datetime64[D]'
@@ -26,7 +33,6 @@ day = np.timedelta64(1, 'D')
 month = np.timedelta64(1, 'M')
 year = np.timedelta64(1, 'Y')
 d_nat = np.datetime64('NaT')
-
 
 # ----- МЕТОДЫ API ----------------------------------------------------------------------------------------------------------------------- #
 class API(object):
@@ -173,19 +179,27 @@ class COUPON_TYPE(object):
 # ----- ТИПЫ ИПОТЕЧНОГО ПОКРЫТИЯ --------------------------------------------------------------------------------------------------------- #
 class POOL_TYPE(object):
 
-    """ Категориальный признак, определяющий один из трех вариантов ипотечного покрытия выпуска ИЦБ ДОМ.РФ:
+    """ Категориальный признак, определяющий один из трех вариантов ипотечного покрытия выпуска ИЦБ ДОМ.РФ.
+        С точки зрения формирования процентных поступлений кредиты в ипотечном покрытии могут быть трех типов:
+            1. Кредиты без субсидий — стандартные кредиты с фиксированной процентной ставкой
+            2. Полностью субсидируемые кредиты — субсидируемые в рамках какой-либо гос. программы кредиты, у которых плавающая ставка
+               субсидии начисляется на весь остаток основного долга
+            3. Частично субсидируемые кредиты — субсидируемые в рамках какой-либо гос. программы кредиты, у которых плавающая ставка
+               субсидии начисляется на фиксированную долю остатка основного долга
 
-            1.	Стандартное ипотечное покрытие полностью состоит из кредитов с фиксированной процентной ставкой
+        Ипотечное покрытие может быть сформировано из двух разных с финансовой точки зрения частей — фиксированной и плавающей.
+        В фиксированную часть входят кредиты без субсидий, а также несубсидируемые доли частично субсидируемых кредитов.
+        В плавающую входят полностью субсидируемые кредиты, а также субсидируемые доли частично субсидируемых кредитов
 
-            2.	Субсидируемое ипотечное покрытие полностью состоит из субсидируемых кредитов с плавающей процентной ставкой (текущая
-                Ключевая ставка + фиксированная для кредита надбавка)
+        В рамках методики выделяется три типа ипотечного покрытия:
+            1. Стандартное (состоит только из фиксированной части)
+            2. Субсидируемое (состоит только из плавающей части)
+            3. Смешанное (есть как фиксированная, так и плавающая часть)
+    """
 
-            3.	В смешанном ипотечном покрытии есть кредиты как с фиксированной, так и с плавающей процентной став-кой
-     """
-
-    FXD = 1  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 1: СТАНДАРТНОЕ
-    FLT = 2  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 2: СУБСИДИРУЕМОЕ
-    MIX = 3  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 3: СМЕШАННОЕ
+    FXD = 1  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 1: СТАНДАРТНОЕ (ТОЛЬКО ФИКСИРОВАННАЯ ЧАСТЬ)
+    FLT = 2  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 2: СУБСИДИРУЕМОЕ (ТОЛЬКО ПЛАВАЮЩАЯ ЧАСТЬ)
+    MIX = 3  # ТИП ИПОТЕЧНОГО ПОКРЫТИЯ 3: СМЕШАННОЕ (ЕСТЬ КАК ФИКСИРОВАННАЯ, ТАК И ПЛАВАЮЩАЯ ЧАСТЬ)
 
 
 # ----- ДАННЫЕ ПО ВЫПЛАТЕ СУБСИДИЙ ----------------------------------------------------------------------------------------------------------- #
@@ -266,8 +280,10 @@ def Y(params, t):
     return 10000.0 * (np.exp(g_t / 10000.0) - 1)
 
 
-# ----- ЗАПРОС НА ОБНОВЛЕНИЕ ДОЛИ ГОТОВНОСТИ РАСЧЕТА ------------------------------------------------------------------------------------- #
+# ----- ЗАПРОС НА ОБНОВЛЕНИЕ ДОЛИ ГОТОВНОСТИ РАСЧЕТА НА САЙТЕ КАЛЬКУЛЯТОРА --------------------------------------------------------------- #
 def update(connection_id, percent, progress_bar=None):
+
+    # logger.info('--calling update')
 
     percent = np.round(percent, 0)
 
@@ -276,6 +292,7 @@ def update(connection_id, percent, progress_bar=None):
         progress_bar.update(int(progress_delta))
 
     if connection_id is None:
+        logger.info('--connection id is None')
         return
 
 
@@ -288,10 +305,10 @@ subs_cf = pd.DataFrame([])
 bond_cf = pd.DataFrame([])
 swap_cf = pd.DataFrame([])
 
-rslt_cols = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'dirtyPrice', 'cleanPrice', 'poolModelCPR']
+rslt_cols = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'dirtyPrice', 'cleanPrice', 'modelCPR']
 
 rslt_cols_ifrs = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime',
-                  'dirtyPrice', 'cleanPrice', 'swapPrice', 'swapPriceRub', 'poolModelCPR']
+                  'dirtyPrice', 'cleanPrice', 'swapPrice', 'swapPriceRub', 'modelCPR', 'poolModelCPR']
 
 pool_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'amortization', 'yield', 'subsidyPaid', 'cpr']
 
@@ -304,8 +321,8 @@ subs_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'keyRa
 bond_cols = ['isin', 'pricingDate', 'couponDate', 'bondPrincipalStartPeriod', 'bondAmortization',
              'bondCouponPayments', 'issuePrincipalStartPeriod', 'issueAmortization', 'issueCouponPayments']
 
-swap_cols = ['isin', 'pricingDate', 'nettingDate', 'fixedSum', 'yield', 'subsidy',
-             'reinvestment', 'expense', 'accruedYield', 'floatSum']
+swap_cols = ['isin', 'pricingDate', 'nettingDate', 'fixedSum', 'yield', 'subsidy', 'reinvestment',
+             'expense', 'accruedYield', 'floatSum']
 
 date_cols = ['pricingDate', 'zcycDateTime', 'poolReportDate', 'reportDate', 'paymentMonth', 'keyRateStartDate',
              'subsidyPaymentDate', 'subsidyCouponDate', 'couponDate', 'nettingDate']
