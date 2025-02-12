@@ -199,6 +199,11 @@ class Convention(object):
         if self.bondParameters['deductionRUONIA'] is not None:
             self.deductionRUONIA = float(self.bondParameters['deductionRUONIA'])
 
+        # --> Индикатор возврата оригинатору начисленной до даты передачи субсидии <--
+        # Бинарный параметр (да/нет, 1/0), определяющий наличие обязательства Ипотечного агента вернуть банку-оригинатору ипотечного
+        # покрытия начисленные до даты передачи субсидии (начисленные проценты возвращаются всегда):
+        self.returnAccruedSubsidy = bool(self.bondParameters['returnAccruedSubsidy'])
+
         # --> Фиксированная ставка купона, % годовых <--
         # Дополнительный параметр выпуска ИЦБ ДОМ.РФ, если Тип расчета купонной выплаты = 1 (Плавающая ставка купона).
         # Значение фиксированной процентной ставки, установленной на весь срок обращения облигаций для расчета купонного дохода:
@@ -322,7 +327,7 @@ class Convention(object):
         # ваться, начиная с самого свежего по состоянию на 23.08.2024 среза ипотечного покрытия, а известные после 10.06.2023 денежные
         # выплаты по выпуску облигаций будут напрямую использованы при дисконтировании)
         #
-        # Значение по умолчанию – 0 (нет), т.е. расчет проводится на данных, доступных на фактическую дату расче-та
+        # Значение по умолчанию – 0 (нет), т.е. расчет проводится на данных, доступных на фактическую дату расчета
         self.usePricingDateDataOnly = False
         if 'usePricingDateDataOnly' in self.pricingParameters.keys() and self.pricingParameters['usePricingDateDataOnly'] is not None:
             self.usePricingDateDataOnly = bool(self.pricingParameters['usePricingDateDataOnly'])
@@ -383,26 +388,33 @@ class Convention(object):
         # ценовой метрике порядка (например, Z-спред будет округлен до целого б.п., чистая цена будет округлена до сотых и т.д.).
         # В случае равенства индикатора нулю значения ценовых метрик будут указаны с точностью до 15 знаков после запятой:
         self.rounding = False
-        self.roundingPrecision = 15
         if 'rounding' in self.pricingParameters.keys() and self.pricingParameters['rounding'] is not None:
             self.rounding = bool(self.pricingParameters['rounding'])
+        self.roundingPrecision = 2 if self.rounding else 15
 
         # ----- ИНДИКАТОР ПРОВЕДЕНИЯ РАСЧЕТА СОГЛАСНО ТРЕБОВАНИЯМ МСФО ------------------------------------------------------------------- #
         # В случае равенства индикатора единице расчет проводится в соответствии с требованиями стандартов МСФО
         self.ifrs = False
         self.poolDataDelay = np.timedelta64(15, 'D')
         self.fullPoolModel = False
+        self.redemptionBuyout = False
+        self.subsidyDelay = True
         self.swapPricing = False
+        self.swapWithOriginator = False
+        self.monthlyFloatingSums = False
+        self.origPaysAccruedYield = False
+        self.lumpSumSwap = 0.0
         if 'ifrs' in self.pricingParameters.keys() and self.pricingParameters['ifrs'] is True:
 
             self.ifrs = True
 
-            # Оценка может проводиться либо на Дату размещения, либо на конец отчетного месяца. Следовательно, при равенстве индикатора
-            # единице, если Дата оценки не равна Дате размещения, день Даты оценки будет автоматически перенесен на последний день месяца:
-            if self.pricingDate != self.issueDate:
-                self.pricingDate = (self.pricingDate.astype(m_type) + month).astype(d_type) - day
+            # Оценка по требованиям МФСО может проводиться либо на Дату размещения, либо на последний день отчетного месяца:
+            condition_1 = self.pricingDate != self.issueDate
+            condition_2 = self.pricingDate != (self.pricingDate.astype(m_type) + month).astype(d_type) - day
+            if condition_1 and condition_2:
+                raise Exception(EXCEPTIONS._14)
 
-            # Индикатор использования только доступной на Дату оценки информации равен единице:
+            # Индикатор использования только доступной на Дату оценки информации должен быть равен единице:
             self.usePricingDateDataOnly = True
 
             # Отчеты Сервисного агента ипотечного покрытия по выпуску ИЦБ ДОМ.РФ на 1 число месяца приходят на 7-10 рабочий день месяца.
@@ -412,16 +424,54 @@ class Convention(object):
 
             # В целях экономии расчетного времени денежный поток по ипотечному покрытию в рамках методики по умолчанию моделируется до
             # конца расчетного периода юридической даты погашения выпуска облигаций. Стандарты МСФО требуют моделировать ипотечное покрытие
-            # до последней выплаты:
+            # в для ряда выпусков до последней выплаты:
             self.fullPoolModel = True
+
+            # По ряду выпусков нужно учитывать, что ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
+            if 'redemptionBuyout' in self.pricingParameters.keys() and self.pricingParameters['redemptionBuyout'] is not None:
+                self.redemptionBuyout = bool(self.pricingParameters['redemptionBuyout'])
+
+            # В рамках расчета по МСФО денежный поток рассчитывается без задержки оплаты субсидии, однако могут запросить с задержкой:
+            self.subsidyDelay = False
+            if 'subsidyDelay' in self.pricingParameters.keys() and self.pricingParameters['subsidyDelay'] is not None:
+                self.subsidyDelay = bool(self.pricingParameters['subsidyDelay'])
 
             # В рамках методики по умолчанию свопы между Ипотечным агентом ДОМ.РФ и ДОМ.РФ (а также между ДОМ.РФ и Оригинаторами ипотечных
             # покрытий) не моделируются. Стандарты МСФО требуют проводить оценку свопов:
             if self.couponType in [COUPON_TYPE.FXD, COUPON_TYPE.FLT]:
                 self.swapPricing = True
 
+                # --> Индикатор наличия свопа с оригинатором ипотечного покрытия <--
+                # Бинарный параметр (да/нет, 1/0), определяющий наличие свопа с оригинатором ипотечного покрытия
+                self.swapWithOriginator = bool(self.bondParameters['swapWithOriginator'])
+
+                # --> Индикатор ежемесячной выплаты плавающих суммы по свопу <--
+                # Бинарный параметр (да/нет, 1/0), определяющий ежемесячную выплату плавающих сумм. Играет роль только при квартальном
+                # купоне: если индикатор равен 0, то плавающие суммы купотся в течение купонного периода и нетяттся с фиксированными суммами
+                # перед купонной выплатой, иначе суммы выплачиваются ежемесячно
+                self.monthlyFloatingSums = bool(self.bondParameters['monthlyFloatingSums'])
+
+                # --> Индикатор оплаты оригинатором начисленных до даты передачи процентов <--
+                # Бинарный параметр (да/нет, 1/0), определяющий наличие выплаты от банка-оригинатора ипотечного покрытия Ипотечному агенту
+                # через своп в течение первого купонного периода суммы в размере начисленных до даты передачи процентов с целью частичной
+                # или полной компенсации расходов первого купонного периода
+                self.origPaysAccruedYield = bool(self.bondParameters['origPaysAccruedYield'])
+
+                # --> Единовременная выплата от оригинатора в первом купонном периоде <--
+                # Сумма, которую банк-оригинатор ипотечного покрытия выплачивает Ипотечному агенту через своп в течение первого купонного
+                # периода с целью частичной или полной компенсации расходов первого купонного периода. В том случае, если Индикатор оплаты
+                # оригинатором начисленных до даты передачи процентов равен единице, то начисленные проценты включаются в указанную сумму
+                # (если сумма меньше начисленных процентов, то выплачиваются только начисленные проценты)
+                self.lumpSumSwap = float(self.bondParameters['lumpSumSwap'])
+
             # Согласно стандартам МСФО, Модельный CDR должен быть равен 0:
             self.cdr = 0.0
+
+        # ----- СДВИГ S-КРИВЫХ ----------------------------------------------------------------------------------------------------------- #
+        # Значение для сдвига всех S-кривых вверх (если положительное) или вниз (если отрицательное), в % год:
+        self.sCurvesShift = 0.0
+        if 'sCurvesShift' in self.pricingParameters.keys() and self.pricingParameters['sCurvesShift'] is not None:
+            self.sCurvesShift = float(self.pricingParameters['sCurvesShift'])
 
         # -------------------------------------------------------------------------------------------------------------------------------- #
         # ----- ОПРЕДЕЛЕНИЕ ДАТЫ СРЕЗА И ТИПА ИПОТЕЧНОГО ПОКРЫТИЯ  ----------------------------------------------------------------------- #
@@ -517,13 +567,14 @@ class Convention(object):
 
         # Однако для различных комбинаций типа ставки купона и типа ипотечного покрытия набор возможных для уставноки значения отличается.
         # Прежде чем проводить расчет, необходимо определиться, верно ли заданы параметры расчета. Для начала определим, что вообще задано:
-        z = 'zSpread' in self.pricingParameters.keys() and self.pricingParameters['zSpread'] is not None
-        g = 'gSpread' in self.pricingParameters.keys() and self.pricingParameters['gSpread'] is not None
-        d = 'dirtyPrice' in self.pricingParameters.keys() and self.pricingParameters['dirtyPrice'] is not None
-        c = 'cleanPrice' in self.pricingParameters.keys() and self.pricingParameters['cleanPrice'] is not None
-        p = 'requiredKeyRatePremium' in self.pricingParameters.keys() and self.pricingParameters['requiredKeyRatePremium'] is not None
-        r = 'fixedCouponRate' in self.pricingParameters.keys() and self.pricingParameters['fixedCouponRate'] is not None
-        k = 'fixedKeyRatePremium' in self.pricingParameters.keys() and self.pricingParameters['fixedKeyRatePremium'] is not None
+        keys = self.pricingParameters.keys()
+        z = 'zSpread' in keys and self.pricingParameters['zSpread'] is not None
+        g = 'gSpread' in keys and self.pricingParameters['gSpread'] is not None
+        d = 'dirtyPrice' in keys and self.pricingParameters['dirtyPrice'] is not None
+        c = 'cleanPrice' in keys and self.pricingParameters['cleanPrice'] is not None
+        p = 'requiredKeyRatePremium' in keys and self.pricingParameters['requiredKeyRatePremium'] is not None
+        r = 'fixedCouponRate' in keys and self.pricingParameters['fixedCouponRate'] is not None
+        k = 'fixedKeyRatePremium' in keys and self.pricingParameters['fixedKeyRatePremium'] is not None
 
         # Если Тип расчета купонной выплаты — фиксированный:
         if self.couponType == COUPON_TYPE.FXD:
@@ -749,6 +800,7 @@ class Convention(object):
         # оценки информации равен 1, необходимо учесть, что на момент Даты оценки Фактическая дата погашения еще могла быть не известна:
 
         self.calculationRedemptionDate = None
+        self.ignoreCleanUp = False
         if self.actualRedemptionDate is not None:
             if self.usePricingDateDataOnly:
                 # Цитата из решений о выпуске ИЦБ ДОМ.РФ: "Эмитент должен принять решение об осуществлении досрочного погашения Облигаций и
@@ -756,8 +808,12 @@ class Convention(object):
                 # осуществления такого досрочного погашения":
                 condition = (self.actualRedemptionDate - self.pricingDate) / day < 14
                 self.calculationRedemptionDate = self.actualRedemptionDate if condition else self.legalRedemptionDate
+                self.ignoreCleanUp = True if condition else False
             else:
+                # Если код дошел до этого места, это означает, что уже известна точная дата погашения выпуска облигаций,
+                # и условие clean-up проверять не нужно:
                 self.calculationRedemptionDate = self.actualRedemptionDate
+                self.ignoreCleanUp = True
         else:
             self.calculationRedemptionDate = self.legalRedemptionDate
 
@@ -797,9 +853,13 @@ class Convention(object):
         self.subsidyPaymentMonths = self.subsidyPaymentMonths.merge(subsidy_months, how='left', on='accrualMonth')
         self.subsidyPaymentDay = subsidy_payment_day  # день месяца, в который приходит субсидия
         paymentMonths = self.paymentsStructure['paymentMonth'].values.astype(m_type)
-        self.paymentsStructure['subsidyPaymentDate'] = (paymentMonths + month * self.subsidyPaymentMonths['addMonths'].values).astype(
-            d_type)
-        self.paymentsStructure['subsidyPaymentDate'] += (self.subsidyPaymentDay - 1) * day
+        if self.subsidyDelay:
+            addMonths = self.subsidyPaymentMonths['addMonths'].values
+            self.paymentsStructure['subsidyPaymentDate'] = (paymentMonths + month * addMonths).astype(d_type)
+            self.paymentsStructure['subsidyPaymentDate'] += (self.subsidyPaymentDay - 1) * day
+        else:
+            # Если требуется провести расчет без задержки субсидии, то полагается, что субсидия выплачивается в конце месяца начисления:
+            self.paymentsStructure['subsidyPaymentDate'] = (paymentMonths + month).astype(d_type) - day
 
         # --> Соответствующая дата купонной выплаты (в части субсидий) <--`
         # Расчетному периоду данной купонной выплаты относятся субсидии, начисленные за Месяц платежей по ипотечному покрытию и начисления
@@ -917,9 +977,8 @@ class Convention(object):
 
             # ----- ДАТА, НА КОТОРОЙ ЗАКАНЧИВАЕТСЯ МОДЕЛИРОВАНИЕ ДЕНЕЖНОГО ПОТОКА ПО ИПОТЕЧНОМУ ПОКРЫТИЮ --------------------------------- #
             if not self.fullPoolModel:
-                # Определяется как последний день расчетного периода юридической даты погашения выпуска облигаций для расчета:
-                redemption_month = self.calculationRedemptionDate.astype(m_type)
-                self.poolCashflowEndDate = (redemption_month - self.paymentPeriodLag * month).astype(d_type) - day
+                # Определяется как последний день месяца юридической даты погашения выпуска облигаций для расчета:
+                self.poolCashflowEndDate = (self.calculationRedemptionDate.astype(m_type) + month).astype(d_type) - day
 
             # ----- ОПОРНАЯ ДАТА МОДЕЛИ КЛЮЧЕВОЙ СТАВКИ ---------------------------------------------------------------------------------- #
             # Дата, по состоянию на которую производится расчет ожидаемой траектории Ключевой ставки:
@@ -931,11 +990,37 @@ class Convention(object):
             # Загрузка данных для модели Ключевой ставки производится на Опорную дату модели макроэкономики:
             self.keyRateModelData = get(API.GET_MACR_DATA.format(self.keyRateModelDate), timeout=15).json()
 
+            if self.ifrs:
+                # В случае расчета по требованиям МСФО на конец месяца необходимо проконтролировать, чтобы уже были загружены актуальные
+                # параметры модели ставки рефинансирования ипотеки (например, расчет 31.03.2024 должен проводиться по параметрам на
+                # 01.04.2024, иначе расчет останавливаетя):
+                condition_1 = self.pricingDate != self.issueDate
+                condition_2 = self.poolReportDate == self.pricingDate + day
+                condition_3 = str(self.keyRateModelDate + day) not in self.keyRateModelData['refinancingRateParameters']['date']
+                if condition_1 and condition_2 and condition_3:
+                    raise Exception(EXCEPTIONS._15.format(str(self.keyRateModelDate + day), str(self.pricingDate)))
+
+                # Дополнительно необходимо проконтролировать, что дата рыночной траектории ключевой ставки на основе котировок свопов
+                # совпадала с датой КБД. Несовпадение означает, что по какой-либо причине рыночная траектория не была рассчитана, и расчет
+                # должен быть остановлен:
+                date_a = np.datetime64(self.zcycParameters['date'], 'D')
+                date_b = np.datetime64(self.keyRateModelData['keyRateSwapForecast']['forecastDate'], 'D')
+                if date_a != date_b:
+                    raise Exception(EXCEPTIONS._16.format(str(date_b), str(date_a), str(self.pricingDate)))
+
             # ----- ДАТА ПАРАМЕТРОВ S-КРИВЫХ ДЛЯ РАСЧЕТА --------------------------------------------------------------------------------- #
             if self.usePricingDateDataOnly:
                 date_a_1 = (self.pricingDate - self.poolDataDelay + self.ifrs * day).astype(m_type).astype(d_type)
                 # ("self.ifrs * day" добавляется для того, чтобы в случае расчета по требованиям МСФО на Дату оценки, например, 31.03.2024
                 # использовались данные на 01.04.2024)
+                if self.ifrs:
+                    # В случае расчета по требованиям МСФО на конец месяца необходимо проконтролировать, чтобы уже были загружены актуальные
+                    # S-кривые (например, расчет 31.03.2024 должен проводиться по S-кривым на 01.04.2024, иначе расчет останавливаетя):
+                    condition_1 = self.pricingDate != self.issueDate
+                    condition_2 = self.poolReportDate == self.pricingDate + day
+                    condition_3 = date_a_1 not in self.sCurvesParameters['reportDate'].values
+                    if condition_1 and condition_2 and condition_3:
+                        raise Exception(EXCEPTIONS._17.format(str(date_a_1), str(self.pricingDate)))
                 date_a_2 = self.sCurvesParameters['reportDate'].values.max().astype(d_type)
                 date_a = min(date_a_1, date_a_2)
                 date_b = self.sCurvesParameters['reportDate'].values.min().astype(d_type)
@@ -994,8 +1079,12 @@ class Convention(object):
         self.mbsCashflowFloat = pd.DataFrame({})
         self.modelCPR = None
         self.poolModelCPR = None
-        self.swapModel = None
-        self.swapPrice = None
+        self.swapModelAgent = None
+        self.swapPriceAgent = None
+        self.swapPriceAgentRub = None
+        self.swapModelOriginator = None
+        self.swapPriceOriginator = None
+        self.swapPriceOriginatorRub = None
 
         self.pricingResult = {}
         self.yearsToCouponDate = None
@@ -1083,11 +1172,13 @@ class Convention(object):
                                                          s_curves=self.calculationSCurvesParameters,
                                                          cdr=self.modelCDR,
                                                          cpr=self.cpr,
+                                                         s_curves_shift=self.sCurvesShift,
                                                          ifrs=self.ifrs,
                                                          no_cdr_months=[0, max(0, 3 - self.deliveryMonths)],
                                                          reinvestment=self.reinvestment,
                                                          stop_date=self.poolCashflowEndDate,
                                                          key_rate_forecast=self.keyRateForecast,
+                                                         subsidy_delay=self.subsidyDelay,
                                                          progress_bar=self.progressBar,
                                                          connection_id=self.connectionId,
                                                          current_percent=self.currentPercent,
@@ -1232,11 +1323,13 @@ class Convention(object):
                                             s_curves=self.calculationSCurvesParameters,
                                             cdr=self.modelCDR,
                                             cpr=self.cpr,
+                                            s_curves_shift=self.sCurvesShift,
                                             ifrs=self.ifrs,
                                             no_cdr_months=[0, max(0, 3 - delivery_months)],
                                             reinvestment=self.reinvestment,
                                             stop_date=stop_date,
                                             key_rate_forecast=self.keyRateForecast,
+                                            subsidy_delay=self.subsidyDelay,
                                             progress_bar=self.progressBar,
                                             connection_id=self.connectionId,
                                             current_percent=self.currentPercent,
@@ -1286,12 +1379,27 @@ class Convention(object):
                     self.mbsModel[part]['pool'].loc[i, c] = pool_model['poolModel'][part]['cashflow'][c].values[0]
 
                 # Проверка восстановленных данных на валидность:
-                if self.mbsModel[part]['pool']['debt'].values[i] < self.mbsModel[part]['pool']['debt'].values[i + 1]:
-                    raise Exception(EXCEPTIONS._12)
+                if i + 1 <= self.mbsModel[part]['pool'].index.max():
+                    if self.mbsModel[part]['pool']['debt'].values[i] < self.mbsModel[part]['pool']['debt'].values[i + 1]:
+                        raise Exception(EXCEPTIONS._12)
 
-                # Фактическая амортизация за месяц:
-                self.mbsModel[part]['pool'].loc[i, 'amortization'] = np.round(self.mbsModel[part]['pool']['debt'].values[i] -
-                                                                              self.mbsModel[part]['pool']['debt'].values[i + 1], 2)
+                    # Фактическая амортизация за месяц:
+                    self.mbsModel[part]['pool'].loc[i, 'amortization'] = np.round(self.mbsModel[part]['pool']['debt'].values[i] -
+                                                                                  self.mbsModel[part]['pool']['debt'].values[i + 1], 2)
+
+                else:
+                    # Ветка на случай, если дата среза ипотечного покрытия за пределами расчетных периодов (например, 28.01.2025
+                    # будет произведено фактическое погашение облигаций, а дата среза ипотечного покрытия 01.01.2025):
+                    date_to_recover = self.mbsModel[part]['pool']['reportDate'].values[i]
+                    index = self.poolModel[part]['cashflow']['paymentMonth'] == (date_to_recover.astype(m_type) + month).astype(d_type)
+
+                    if self.mbsModel[part]['pool']['debt'].values[i] < self.poolModel[part]['cashflow']['debt'].values[index][0]:
+                        raise Exception(EXCEPTIONS._12)
+
+                    # Фактическая амортизация за месяц:
+                    self.mbsModel[part]['pool'].loc[i, 'amortization'] = np.round(self.mbsModel[part]['pool']['debt'].values[i] -
+                                                                                  self.poolModel[part]['cashflow']['debt'].values[index][0],
+                                                                                  2)
 
                 # Денежный поток в месяц i уже является не модельным, а историческим:
                 self.mbsModel[part]['pool'].loc[i, 'model'] = 0
@@ -1407,8 +1515,14 @@ class Convention(object):
             # Разница между объемом выпуска облигаций и объемом ипотечного покрытия на начало первого расчетного периода:
             index = self.mbsModel['total']['pool']['couponDate'] == self.firstCouponDate
             pool_debt = self.mbsModel['total']['pool'][index]['debt'].values[0]
-            dif_total = round_floor((self.mbsModel['total']['principal'] * num - pool_debt) / num, 2) * num
-            dif_fixed = round_floor(dif_total * fixed_fraction / num, 2) * num
+
+            dif_total, dif_fixed, dif_float = 0.0, 0.0, 0.0
+            if self.mbsModel['total']['principal'] * num - pool_debt > 0.0:
+                dif_total = round_floor((self.mbsModel['total']['principal'] * num - pool_debt) / num, 2) * num
+                dif_fixed = round_floor(dif_total * fixed_fraction / num, 2) * num
+            else:
+                dif_total = round_ceil((self.mbsModel['total']['principal'] * num - pool_debt) / num, 2) * num
+                dif_fixed = round_ceil(dif_total * fixed_fraction / num, 2) * num
             dif_float = np.round(dif_total - dif_fixed, 2)
 
             # В том случае, если облигаций разместили на сумму большую, чем сумма остатков основного долга в ипотечном покрытии, то
@@ -1513,7 +1627,11 @@ class Convention(object):
 
                 # Если номинал выпуска облигаций не достиг порога clean-up и дата купонной выплаты не равна Юридической дате
                 # погашения выпуска облигаций для расчета, необходимо произвести частичное погашение выпуска облигаций:
-                if current_total_principal >= self.cleanUpRubles and coupon_date < self.calculationRedemptionDate:
+                condition = current_total_principal >= self.cleanUpRubles and coupon_date < self.calculationRedemptionDate
+                if self.ignoreCleanUp:
+                    condition = coupon_date < self.calculationRedemptionDate
+
+                if condition:
 
                     # Частичное погашение выпуска облигаций в фиксированной части:
                     self.mbsModel['fixed']['issue'].loc[i, 'amortization'] = issue_amt_fixed
@@ -1544,7 +1662,7 @@ class Convention(object):
 
                 # Если номинал выпуска облигаций перешел порог clean-up или дата купонной выплаты равна Юридической дате
                 # погашения выпуска облигаций для расчета, необходимо произвести полное погашение выпуска облигаций:
-                elif current_total_principal < self.cleanUpRubles or coupon_date == self.calculationRedemptionDate:
+                else:
 
                     # Погашение выпуска облигаций в фиксированной части сверх поступлений по ипотечному покрытию:
                     clean_up_fixed = current_fixed_principal - issue_amt_fixed
@@ -1630,7 +1748,7 @@ class Convention(object):
         # -------------------------------------------------------------------------------------------------------------------------------- #
 
         # Количество дней до купонной выплаты, когда происходит списание денежных средств со счета Ипотечного агента:
-        self.writeOffDays = 7 * day
+        self.writeOffDays = 7 * day + 7 * day * self.paymentPeriodLag
 
         self.reinvModel = {'fixed': None, 'float': None}
         if self.reinvestment:
@@ -1747,30 +1865,29 @@ class Convention(object):
             c = float(self.couponPeriod)
 
             # Основные статьи расходов:
-            self.mbsModel[part]['inflow']['expense'] = np.round(p * self.mortgageAgentExpense1 / 100.0 * d3, 2)
+            self.mbsModel[part]['inflow']['expensePart1'] = np.round(p * self.mortgageAgentExpense1 / 100.0 * d3, 2)
             if self.mbsModel[part]['inflow']['couponDate'].values[0] == self.firstCouponDate:
-                self.mbsModel[part]['inflow'].loc[0, 'expense'] += np.round(p[0] * self.mortgageAgentExpense1 / 100.0 * d2[0], 2)
-            self.mbsModel[part]['inflow']['expensePart1'] = np.round(self.mbsModel[part]['inflow']['expense'].values, 2)
-            self.mbsModel[part]['inflow']['expense'] += np.round(p * self.mortgageAgentExpense2 / 100.0 * d1, 2)
+                self.mbsModel[part]['inflow'].loc[0, 'expensePart1'] += np.round(p[0] * self.mortgageAgentExpense1 / 100.0 * d2[0], 2)
+            self.mbsModel[part]['inflow']['expensePart2'] = np.round(p * self.mortgageAgentExpense2 / 100.0 * d1, 2)
 
             # Вознаграждение спец. депозитария:
             minimum = self.specDepMinMonthIssueDoc * 12.0 * d1 * f
-            self.mbsModel[part]['inflow']['expense'] += np.round(np.maximum(p * self.specDepRateIssueDoc / 100.0 * d1, minimum), 2)
-            self.mbsModel[part]['inflow']['expense'] += np.round(self.specDepCompensationMonthIssueDoc * 12.0 * d1 * f)
+            self.mbsModel[part]['inflow']['expensePart3'] = np.round(np.maximum(p * self.specDepRateIssueDoc / 100.0 * d1, minimum)
+                                                                     + self.specDepCompensationMonthIssueDoc * 12.0 * d1 * f, 2)
 
             # Управляющая и бухгалтерская организации:
-            self.mbsModel[part]['inflow']['expense'] += 2 * np.round(p * self.manAccQuartRateIssueDoc / 100.0 * 4.0 * d1, 2)
-            self.mbsModel[part]['inflow']['expense'] += 2 * np.round(self.manAccQuartFixIssueDoc * 4.0 * d1 * f, 2)
+            self.mbsModel[part]['inflow']['expensePart4'] = 2 * np.round(p * self.manAccQuartRateIssueDoc / 100.0 * 4.0 * d1
+                                                                         + self.manAccQuartFixIssueDoc * 4.0 * d1 * f, 2)
 
             # Расчетный агент:
-            self.mbsModel[part]['inflow']['expense'] += np.round(self.paymentAgentYearIssueDoc * d1 * f, 2)
+            self.mbsModel[part]['inflow']['expensePart5'] = np.round(self.paymentAgentYearIssueDoc * d1 * f, 2)
 
             # Технические расчеты:
+            cols = ['expensePart1', 'expensePart2', 'expensePart3', 'expensePart4', 'expensePart5']
+            self.mbsModel[part]['inflow']['expense'] = self.mbsModel[part]['inflow'][cols].sum(axis=1)
             self.mbsModel[part]['inflow']['expense'] = np.round(self.mbsModel[part]['inflow']['expense'].values, 2)
-            self.mbsModel[part]['inflow']['expensePart2'] = np.round(self.mbsModel[part]['inflow']['expense'].values -
-                                                                     self.mbsModel[part]['inflow']['expensePart1'].values, 2)
 
-            # Начисленные, но не выплаченные проценты (НВП):
+            # Начисленные, но не выплаченные проценты:
             self.mbsModel[part]['inflow']['accruedYield'] = 0.0
             if self.mbsModel[part]['inflow']['couponDate'].values[0] == self.firstCouponDate:
                 accrued_yield = 0.0
@@ -1778,8 +1895,35 @@ class Convention(object):
                     accrued_yield = self.poolModel[part]['accruedYield']
                 else:
                     accrued_yield = recovered_pools[str(self.deliveryDate)]['poolModel'][part]['accruedYield']
-                self.mbsModel[part]['inflow'].loc[0, 'accruedYield'] = accrued_yield
-                self.mbsModel[part]['inflow']['accruedYield'] = np.round(self.mbsModel[part]['inflow']['accruedYield'].values, 2)
+                if accrued_yield > 0.0:
+                    # Считаем, что выплачены начисленные проценты будут только с приходом ближайших процентов:
+                    first_yield_index = np.where(self.mbsModel[part]['inflow']['yield'].values > 0.0)[0][0]
+                    self.mbsModel[part]['inflow'].loc[first_yield_index, 'accruedYield'] = accrued_yield
+                    self.mbsModel[part]['inflow']['accruedYield'] = np.round(self.mbsModel[part]['inflow']['accruedYield'].values, 2)
+
+            # Единовременная выплата в своп:
+            self.mbsModel[part]['inflow']['lumpSumSwap'] = 0.0
+            if self.mbsModel[part]['inflow']['couponDate'].values[0] == self.firstCouponDate:
+                lump_sum = self.lumpSumSwap
+                if self.origPaysAccruedYield:
+                    # В том случае, если предусмотрена оплата оригинатором начисленных до даты передачи процентов, то начисленные проценты
+                    # включаются в указанную сумму (если сумма меньше начисленных процентов, то выплачиваются только начисленные проценты):
+                    lump_sum = accrued_yield + max(0.0, self.lumpSumSwap * f[0] - accrued_yield)
+                self.mbsModel[part]['inflow'].loc[0, 'lumpSumSwap'] = np.round(lump_sum, 2)
+
+            # Начисленные, но не выплаченные субсидии:
+            self.mbsModel[part]['inflow']['accruedSubsidy'] = 0.0
+            if self.mbsModel[part]['inflow']['couponDate'].values[0] == self.firstCouponDate:
+                accrued_subsidy = 0.0
+                if self.poolReportDate == self.deliveryDate:
+                    accrued_subsidy = self.poolModel[part]['accruedSubsidy']
+                else:
+                    accrued_subsidy = recovered_pools[str(self.deliveryDate)]['poolModel'][part]['accruedSubsidy']
+                if self.returnAccruedSubsidy and accrued_subsidy > 0.0:
+                    # Считаем, что выплачена начисленная субсидия будет только с приходом ближайшей субсидии:
+                    first_subsidy_index = np.where(self.mbsModel[part]['inflow']['subsidy'].values > 0.0)[0][0]
+                    self.mbsModel[part]['inflow'].loc[first_subsidy_index, 'accruedSubsidy'] = accrued_subsidy
+                    self.mbsModel[part]['inflow']['accruedSubsidy'] = np.round(self.mbsModel[part]['inflow']['accruedSubsidy'].values, 2)
 
             # Добавляем суммы начислений на остаток на счете, если начисление есть:
             if self.reinvestment and self.reinvModel[part] is not None:
@@ -1788,15 +1932,44 @@ class Convention(object):
             else:
                 self.mbsModel[part]['inflow']['reinvestment'] = 0.0
 
+            # Добавляем процентные поступления, полученные между датой окончания последнего расчетного периода и датой погашения выпуска:
+            # Для начала определяем последний месяц последнего расчетного пероида (last_payment_month).
+            # Деньги за этот месяц уже отправлены в последнюю выплату:
+            last_payment_period = self.paymentsStructure['couponDate'] == self.modelRedemptionDate
+            last_payment_month = self.paymentsStructure[last_payment_period]['paymentMonth'].values[-1]
+            # Далее, определяем список месяцев (months_to_add), за которые нужно взять полученные проценты:
+            first_month_to_add = last_payment_month.astype(m_type) + month
+            redemption_month = self.modelRedemptionDate.astype(m_type)
+            months_to_add = np.arange(first_month_to_add, redemption_month + month, month).astype(d_type)
+            redemption_index = self.mbsModel[part]['inflow']['couponDate'] == self.modelRedemptionDate
+            # Добавляем проценты за каждый месяц:
+            for m in months_to_add:
+                index = self.poolModel[part]['cashflow']['paymentMonth'] == m
+                if index.any():
+                    yield_to_add = self.poolModel[part]['cashflow'][index]['yield'].values[0]
+                    if m == redemption_month.astype(d_type):
+                        # Для месяца погашения берем только проценты, которые пришли до "даты погашения минус 3 дня"
+                        # (упрощенно через долю в месяце, не принимая в расчет реальное распределение дней выплат):
+                        days_in_month = ((redemption_month + month).astype(d_type) - redemption_month.astype(d_type)) / day
+                        days_before_redemption = max(0.0, (self.modelRedemptionDate - redemption_month.astype(d_type)) / day - 3.0)
+                        self.redemptionMonthFraction = days_before_redemption / days_in_month
+                        yield_to_add = np.round(yield_to_add * self.redemptionMonthFraction, 2)
+                    # Добавляем проценты в последний расчетный период:
+                    self.mbsModel[part]['inflow'].loc[redemption_index, 'yield'] += yield_to_add
+
             # Плавающие суммы:
             self.mbsModel[part]['inflow']['floatSum'] = np.round(self.mbsModel[part]['inflow']['yield'].values +
                                                                  self.mbsModel[part]['inflow']['subsidy'].values +
-                                                                 self.mbsModel[part]['inflow']['reinvestment'].values -
+                                                                 self.mbsModel[part]['inflow']['reinvestment'].values +
+                                                                 self.mbsModel[part]['inflow']['lumpSumSwap'].values -
                                                                  self.mbsModel[part]['inflow']['expense'].values -
-                                                                 self.mbsModel[part]['inflow']['accruedYield'].values, 2)
+                                                                 self.mbsModel[part]['inflow']['accruedYield'].values -
+                                                                 self.mbsModel[part]['inflow']['accruedSubsidy'].values, 2)
 
-        # Начисленные, но не выплаченные проценты, расходы и плавающие суммы всего ипотечного покрытия:
-        for c in ['reinvestment', 'expense', 'expensePart1', 'expensePart2', 'accruedYield', 'floatSum']:
+        # Начисленные, но не выплаченные проценты/субсидии, расходы и плавающие суммы всего ипотечного покрытия:
+        cols = ['yield', 'reinvestment', 'lumpSumSwap', 'expense', 'expensePart1', 'expensePart2', 'expensePart3',
+                'expensePart4', 'expensePart5', 'accruedYield', 'accruedSubsidy', 'floatSum']
+        for c in cols:
             self.mbsModel['total']['inflow'][c] = np.round(self.mbsModel['fixed']['inflow'][c].values +
                                                            self.mbsModel['float']['inflow'][c].values, 2)
 
@@ -2013,7 +2186,7 @@ class Convention(object):
             c = ['principalStartPeriod', 'amortization', 'couponPayment']
             self.mbsCashflowFixed.loc[future_model, c] = self.mbsModel['fixed']['bond'][c].values
 
-            # ИЦБ в плавающе части:
+            # ИЦБ в плавающей части:
             self.mbsCashflowFloat = self.mbsCashflow.copy(deep=True)
             c = ['principalStartPeriod', 'amortization', 'couponPayment']
             self.mbsCashflowFloat.loc[future_model, c] = self.mbsModel['float']['bond'][c].values
@@ -2207,51 +2380,89 @@ class Convention(object):
 
             # Формируем основу модели свопа:
             c = ['couponDate', 'couponDays', 'principalStartPeriod']
-            self.swapModel = self.mbsCashflow[c].copy(deep=True)
+            self.swapModelAgent = self.mbsCashflow[c].copy(deep=True)
 
             # Непогашенный объем выпуска до выплаты купона:
-            self.swapModel['principalStartPeriod'] = np.round(self.swapModel['principalStartPeriod'].values * self.numberOfBonds, 2)
+            self.swapModelAgent['principalStartPeriod'] = np.round(self.swapModelAgent['principalStartPeriod'].values * self.numberOfBonds,
+                                                                   2)
 
             # Рассчитываем фиксированные суммы. Т.к. своп считается от лица ДОМ.РФ в отношении Ипотечного агента, фиксированные суммы
             # указываются со знаком "минус":
-            self.swapModel['fixedSum'] = -np.round(self.mbsCashflow['couponPayment'].values * self.numberOfBonds, 2)
+            self.swapModelAgent['fixedSum'] = -np.round(self.mbsCashflow['couponPayment'].values * self.numberOfBonds, 2)
 
             # Добавляем модельные плавающие суммы и их компоненты:
-            c = ['couponDate', 'yield', 'subsidy', 'reinvestment', 'expense', 'accruedYield', 'floatSum']
-            self.swapModel = self.swapModel.merge(self.mbsModel['total']['inflow'][c], how='left', on='couponDate')
-            for col in c[1:]:
-                self.swapModel
+            c = ['couponDate', 'yield', 'subsidy', 'reinvestment', 'lumpSumSwap', 'expense', 'accruedYield', 'accruedSubsidy', 'floatSum']
+            self.swapModelAgent = self.swapModelAgent.merge(self.mbsModel['total']['inflow'][c], how='left', on='couponDate')
 
             # Указываем, когда именно пройдет неттинг по свопу:
-            self.swapModel['couponDate'] -= self.writeOffDays
-            self.swapModel.rename(columns={'couponDate': 'nettingDate'}, inplace=True)
+            self.swapModelAgent['couponDate'] -= self.writeOffDays
+            self.swapModelAgent.rename(columns={'couponDate': 'nettingDate'}, inplace=True)
 
             # Оставляем только платежи, которые состоятся строго после Даты оценки:
-            future = self.swapModel['nettingDate'] > self.pricingDate
-            self.swapModel = self.swapModel[future]
+            future = self.swapModelAgent['nettingDate'] > self.pricingDate
+            self.swapModelAgent = self.swapModelAgent[future].reset_index(drop=True)
+
+            # Проверяем, не была ли уже выплачена часть плавающих сумм:
+            if self.monthlyFloatingSums and self.couponPeriod == 3:
+                # Берем расчетный период ближайшей по потоку по свопу купонной выплаты (payment_period):
+                index = self.mbsModel['total']['pool']['couponDate'] == self.swapModelAgent['nettingDate'].values[0] + self.writeOffDays
+                payment_period = self.mbsModel['total']['pool'][index].copy(deep=True)
+                # Для каждого месяца этого расчетного периода указываем дату, в которую ипотечный агент переведет по свопу процентные
+                # поступления за данный месяц (swapPaymentDate):
+                payment_period['swapPaymentDate'] = (payment_period['paymentMonth'].values.astype(m_type) + month).astype(d_type) + 20 * day
+                # Определяем сумму процентных поступлений, которые уже были переведены по свопу по состоянию на дату оценки:
+                index = payment_period['swapPaymentDate'] <= self.pricingDate
+                yield_to_deduct = payment_period['yield'][index].sum()
+                # Вычитаем данную сумму из следующей плавающей суммы:
+                self.swapModelAgent.loc[0, 'yield'] -= yield_to_deduct
+                self.swapModelAgent.loc[0, 'floatSum'] -= yield_to_deduct
 
             # Рассчитываем фиксированные и плавающие суммы в терминах процентов годовых:
-            coupon_days = self.swapModel['couponDays'].values
-            issue_principals = self.swapModel['principalStartPeriod'].values
-            fixed_sums = self.swapModel['fixedSum'].values
-            float_sums = self.swapModel['floatSum'].values
+            coupon_days = self.swapModelAgent['couponDays'].values
+            issue_principals = self.swapModelAgent['principalStartPeriod'].values
+            fixed_sums = self.swapModelAgent['fixedSum'].values
+            float_sums = self.swapModelAgent['floatSum'].values
 
-            self.swapModel['fixedSumPercent'] = np.round(-fixed_sums / issue_principals * 365.0 / coupon_days * 100.0, 2)
-            self.swapModel['floatSumPercent'] = np.round(float_sums / issue_principals * 365.0 / coupon_days * 100.0, 2)
-            self.swapModel.drop(columns=['couponDays', 'principalStartPeriod'], inplace=True)
+            self.swapModelAgent['fixedSumPercent'] = np.round(-fixed_sums / issue_principals * 365.0 / coupon_days * 100.0, 2)
+            self.swapModelAgent['floatSumPercent'] = np.round(float_sums / issue_principals * 365.0 / coupon_days * 100.0, 2)
+            self.swapModelAgent.drop(columns=['couponDays', 'principalStartPeriod'], inplace=True)
 
             # Количество лет между будущей датой неттинга по свопу и Датой оценки:
-            t = (self.swapModel['nettingDate'].values - self.pricingDate) / np.timedelta64(1, 'D') / 365.0
+            t = (self.swapModelAgent['nettingDate'].values - self.pricingDate) / np.timedelta64(1, 'D') / 365.0
 
             # Фактор дисконтирования в зависимости от типа купона:
             z_spread = self.requiredKeyRatePremium if self.couponType is COUPON_TYPE.FLT else self.zSpread
             df = self.dfZCYCPlusZ(z_spread, t)
 
-            # Стоимость свопа в рублях:
-            self.swapPriceRub = np.round(np.sum((fixed_sums + float_sums) * df), 2)
+            # Стоимость свопа с ипотечным агентом с точки зрения ДОМ.РФ в рублях:
+            self.swapPriceAgentRub = np.round(np.sum((fixed_sums + float_sums) * df), 2)
 
-            # Стоимость свопа в % от непогашенного номинала выпуска облигаций:
-            self.swapPrice = self.swapPriceRub / (self.currentBondPrincipal * self.numberOfBonds) * 100.0
+            # Стоимость свопа с ипотечным агентом с точки зрения ДОМ.РФ в % от непогашенного номинала выпуска облигаций:
+            self.swapPriceAgent = self.swapPriceAgentRub / (self.currentBondPrincipal * self.numberOfBonds) * 100.0
+
+            if self.swapWithOriginator:
+                self.swapModelOriginator = self.swapModelAgent[['nettingDate', 'fixedSum', 'floatSum']]
+
+                # Потоки по свопу с оригинатором имеют обратный знак по сравнению с потоками с ипотечным агентом:
+                self.swapModelOriginator['fixedSum'] *= -1
+                self.swapModelOriginator['floatSum'] *= -1
+
+                # Своп с оригинатором неттится в среднем через два дня после неттинга по свопу с ипотечным агентом:
+                self.swapModelOriginator['nettingDate'] += 2 * day
+                future = self.swapModelOriginator['nettingDate'] > self.pricingDate
+                self.swapModelOriginator = self.swapModelOriginator[future].reset_index(drop=True)
+
+                # Количество лет между будущей датой неттинга по свопу и Датой оценки:
+                t = (self.swapModelOriginator['nettingDate'].values - self.pricingDate) / np.timedelta64(1, 'D') / 365.0
+                df = self.dfZCYCPlusZ(z_spread, t)
+
+                # Стоимость свопа с оригинатором с точки зрения ДОМ.РФ в рублях:
+                fixed_sums = self.swapModelOriginator['fixedSum'].values
+                float_sums = self.swapModelOriginator['floatSum'].values
+                self.swapPriceOriginatorRub = np.round(np.sum((fixed_sums + float_sums) * df), 2)
+
+                # Стоимость свопа с оригинатором с точки зрения ДОМ.РФ в % от непогашенного номинала выпуска облигаций:
+                self.swapPriceOriginator = self.swapPriceOriginatorRub / (self.currentBondPrincipal * self.numberOfBonds) * 100.0
 
         # [ОБНОВЛЕНИЕ СТАТУСА РАСЧЕТА]
         self.currentPercent = 99.0
@@ -2268,17 +2479,17 @@ class Convention(object):
         # -------------------------------------------------------------------------------------------------------------------------------- #
 
         self.pricingResult = {
-            'accruedCouponInterest': np.round(self.accruedCouponInterest, 2 if self.rounding else self.roundingPrecision),
+            'accruedCouponInterest': np.round(self.accruedCouponInterest, self.roundingPrecision),
             'accruedCouponInterestRub': self.accruedCouponInterestRub,
-            'dirtyPrice': np.round(self.dirtyPrice, 2 if self.rounding else self.roundingPrecision),
+            'dirtyPrice': np.round(self.dirtyPrice, self.roundingPrecision),
             'dirtyPriceRub': self.dirtyPriceRub,
-            'cleanPrice': np.round(self.cleanPrice, 2 if self.rounding else self.roundingPrecision),
+            'cleanPrice': np.round(self.cleanPrice, self.roundingPrecision),
             'cleanPriceRub': self.cleanPriceRub,
         }
 
         self.pricingResult['ytm'] = None
         if self.ytm is not None:
-            self.pricingResult['ytm'] = np.round(self.ytm, 2 if self.rounding else self.roundingPrecision)
+            self.pricingResult['ytm'] = np.round(self.ytm, self.roundingPrecision)
 
         self.pricingResult['zSpread'] = None
         if self.zSpread is not None:
@@ -2310,17 +2521,23 @@ class Convention(object):
 
         self.pricingResult['durationMacaulay'] = None
         if self.durationMacaulay is not None:
-            self.pricingResult['durationMacaulay'] = np.round(self.durationMacaulay, 2 if self.rounding else self.roundingPrecision)
+            self.pricingResult['durationMacaulay'] = np.round(self.durationMacaulay, self.roundingPrecision)
 
         self.pricingResult['durationModified'] = None
         if self.durationModified is not None:
-            self.pricingResult['durationModified'] = np.round(self.durationModified, 2 if self.rounding else self.roundingPrecision)
+            self.pricingResult['durationModified'] = np.round(self.durationModified, self.roundingPrecision)
 
-        self.pricingResult['swapPrice'] = None
-        self.pricingResult['swapPriceRub'] = None
-        if self.swapPricing:
-            self.pricingResult['swapPrice'] = np.round(self.swapPrice, 2 if self.rounding else self.roundingPrecision)
-            self.pricingResult['swapPriceRub'] = self.swapPriceRub
+        if self.ifrs:
+            self.pricingResult['swapPriceAgent'] = None
+            self.pricingResult['swapPriceAgentRub'] = None
+            self.pricingResult['swapPriceOriginator'] = None
+            self.pricingResult['swapPriceOriginatorRub'] = None
+            if self.swapPricing:
+                self.pricingResult['swapPriceAgent'] = np.round(self.swapPriceAgent, self.roundingPrecision)
+                self.pricingResult['swapPriceAgentRub'] = self.swapPriceAgentRub
+                if self.swapWithOriginator:
+                    self.pricingResult['swapPriceOriginator'] = np.round(self.swapPriceOriginator, self.roundingPrecision)
+                    self.pricingResult['swapPriceOriginatorRub'] = self.swapPriceOriginatorRub
 
         self.calculationOutput['pricingResult'] = self.pricingResult
 
@@ -2361,7 +2578,7 @@ class Convention(object):
                 # Берем за основу денежный поток по ипотечному покрытию с учетом восстановленных платежей в прошлом:
                 base_cf = self.mbsModel[part]['pool']
 
-                # pool_cf заканчивается на последнем месяце расчетного периода модельной даты погашения выпуска облигаций. В том случае,
+                # base_cf заканчивается на последнем месяце расчетного периода модельной даты погашения выпуска облигаций. В том случае,
                 # если пользователь установил полный расчет денежного потока по ипотечному покрытию, необходимо добавить денежный поток за
                 # месяцы после последнего месяца расчетного периода модельной даты погашения выпуска облигаций:
                 if self.fullPoolModel:
@@ -2439,22 +2656,10 @@ class Convention(object):
                     # Увеличиваем yield на размер перенесенных процентных поступлений:
                     pool_cf['yield'] = np.round(pool_cf['yield'].values + pool_cf['yieldIFRS'].values, 2)
 
-                    # — expensePart1 — расходы Ипотечного агента, заплаченные в месяц paymentMonth (часть 1);
-                    # — expensePart2 — все остальные расходы Ипотечного агента, заплаченные в месяц paymentMonth:
-                    expense_parts = self.mbsModel[part]['inflow'][['couponDate', 'expensePart1', 'expensePart2']]
-                    if self.swapPricing:
-                        expense_parts['couponDate'] -= self.writeOffDays
-                    expense_parts['couponDate'] = expense_parts['couponDate'].values.astype(m_type).astype(s_type).astype(str)
-                    expense_parts.rename(columns={'couponDate': 'paymentMonth'}, inplace=True)
-                    pool_cf = pool_cf.merge(expense_parts, how='left', on='paymentMonth')
-
-                else:
-                    pool_cf['expensesPart1'] = 0.0
-                    pool_cf['expensesPart2'] = 0.0
-
                 subsidy_cf = None
                 # Поля, относящиеся к начислению и выплате субсидий:
                 if self.poolType in [POOL_TYPE.FLT, POOL_TYPE.MIX] and part in ['total', 'float']:
+
                     subsidy_cf = pool_cf[['reportDate', 'paymentMonth', 'debt', ]].copy(deep=True)
 
                     # — keyRateStartDate — дата заседания Совета директоров Банка России, в устанавливается Ключевая ставка, по которой
@@ -2479,8 +2684,12 @@ class Convention(object):
                     subsidy_payment_months = pd.DataFrame(report_dates, columns=['accrualMonth'])
                     subsidy_payment_months = subsidy_payment_months.merge(subsidy_months, how='left', on='accrualMonth')
                     payment_months = subsidy_cf['paymentMonth'].values.astype(m_type)
-                    subsidy_cf['subsidyPaymentDate'] = (payment_months + month * subsidy_payment_months['addMonths'].values).astype(d_type)
-                    subsidy_cf['subsidyPaymentDate'] += (self.subsidyPaymentDay - 1) * day
+                    if self.subsidyDelay:
+                        addMonths = subsidy_payment_months['addMonths'].values
+                        subsidy_cf['subsidyPaymentDate'] = (payment_months + month * addMonths).astype(d_type)
+                        subsidy_cf['subsidyPaymentDate'] += (self.subsidyPaymentDay - 1) * day
+                    else:
+                        subsidy_cf['subsidyPaymentDate'] = (payment_months + month).astype(d_type) - day
                     subsidy_cf['subsidyPaymentDate'] = subsidy_cf['subsidyPaymentDate'].values.astype(s_type).astype(str)
 
                     # — subsidyCouponDate — дата купонной выплаты, в расчетный период которой выплачивается субсидия subsidyAccrued,
@@ -2500,21 +2709,31 @@ class Convention(object):
 
                     pool_cf['subsidyPaid'] = np.round(subsidy_cf['subsidyPaid'].values, 2)
 
-                pool_cf['reportDate'] = pool_cf['reportDate'].values.astype(s_type).astype(str)
-                pool_cf.replace({np.nan: None}, inplace=True)
-                self.calculationOutput['poolCashflowTable'][part] = pool_cf.to_dict('list')
-
-                if subsidy_cf is not None and part == 'total':
-                    subsidy_cf['reportDate'] = subsidy_cf['reportDate'].values.astype(s_type).astype(str)
-                    subsidy_cf.replace({np.nan: None, 'NaT': None}, inplace=True)
-                    self.calculationOutput['subsidyCashflowTable'] = subsidy_cf.to_dict('list')
-
                 if part == 'total' and self.fullPoolModel:
                     # Средневзвешенный по модельным суммам остатков основного долга в ипотечном покрытии CPR до погашения последнего
                     # кредита в ипотечном покрытии (определяется только в том случае, если ипотечное покрытие моделируется до конца):
                     p = (pool_cf['model'] == 1) & (pool_cf['debt'] > 0.0) & (pool_cf['cpr'] > 0.0)
                     self.poolModelCPR = np.sum(pool_cf['debt'].values[p] * pool_cf['cpr'].values[p]) / np.sum(pool_cf['debt'].values[p])
                     self.poolModelCPR = np.round(self.poolModelCPR, 2)
+
+                if self.ifrs and self.redemptionBuyout:
+                    # Ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
+                    pool_cf = pool_cf[pool_cf['reportDate'] < self.modelRedemptionDate]
+                    pool_cf['amortization'].values[-1] = pool_cf['debt'].values[-1]
+                    # Отобразить в денежном потоке по ипотечному покрытию только те проценты, которые реально попадут в расчетный период:
+                    pool_cf['yield'].values[-1] = np.round(pool_cf['yield'].values[-1] * self.redemptionMonthFraction, 2)
+
+                if subsidy_cf is not None and part == 'total':
+                    if self.ifrs and self.redemptionBuyout:
+                        # Учитывать, что данное ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
+                        subsidy_cf = subsidy_cf[subsidy_cf['reportDate'] < self.modelRedemptionDate]
+                    subsidy_cf['reportDate'] = subsidy_cf['reportDate'].values.astype(s_type).astype(str)
+                    subsidy_cf.replace({np.nan: None, 'NaT': None}, inplace=True)
+                    self.calculationOutput['subsidyCashflowTable'] = subsidy_cf.to_dict('list')
+
+                pool_cf['reportDate'] = pool_cf['reportDate'].values.astype(s_type).astype(str)
+                pool_cf.replace({np.nan: None}, inplace=True)
+                self.calculationOutput['poolCashflowTable'][part] = pool_cf.to_dict('list')
 
         # -------------------------------------------------------------------------------------------------------------------------------- #
         # ----- ДЕНЕЖНЫЙ ПОТОК ПО ИЦБ ДОМ.РФ --------------------------------------------------------------------------------------------- #
@@ -2546,11 +2765,76 @@ class Convention(object):
         # ----- ДЕНЕЖНЫЙ ПОТОК ПО СВОПУ МЕЖДУ ДОМ.РФ И ИПОТЕЧНЫМ АГЕНТОМ С ТОЧКИ ЗРЕНИЯ ДОМ.РФ ------------------------------------------- #
         # -------------------------------------------------------------------------------------------------------------------------------- #
 
-        self.calculationOutput['swapCashflowTable'] = None
-
         if self.swapPricing:
-            self.swapModel['nettingDate'] = self.swapModel['nettingDate'].values.astype(s_type).astype(str)
-            self.calculationOutput['swapCashflowTable'] = self.swapModel.to_dict('list')
+
+            self.calculationOutput['swapAgentCashflowTable'] = None
+            self.calculationOutput['swapOriginatorCashflowTable'] = None
+
+            self.swapModelAgent['nettingDate'] = self.swapModelAgent['nettingDate'].values.astype(s_type).astype(str)
+            self.calculationOutput['swapAgentCashflowTable'] = self.swapModelAgent.to_dict('list')
+
+            if self.swapWithOriginator:
+                self.swapModelOriginator['nettingDate'] = self.swapModelOriginator['nettingDate'].values.astype(s_type).astype(str)
+                self.calculationOutput['swapOriginatorCashflowTable'] = self.swapModelOriginator.to_dict('list')
+
+        # -------------------------------------------------------------------------------------------------------------------------------- #
+        # ----- ДЕНЕЖНЫЙ ПОТОК РАСХОДОВ ИПОТЕЧНОГО АГЕНТА -------------------------------------------------------------------------------- #
+        # -------------------------------------------------------------------------------------------------------------------------------- #
+
+        self.calculationOutput['expenseCashflowTable'] = None
+
+        if self.ifrs:
+
+            # Формируем основу:
+            c = ['couponDate', 'couponDays', 'principalStartPeriod']
+            self.expenseCashflowTable = self.mbsCashflow[c].copy(deep=True)
+
+            # Непогашенный объем выпуска до выплаты купона:
+            self.expenseCashflowTable['issuePrincipalStartPeriod'] = np.round(self.expenseCashflowTable['principalStartPeriod'].values *
+                                                                              self.numberOfBonds, 2)
+
+            # Добавляем денежные потоки расходов:
+            c = ['couponDate', 'expensePart1', 'expensePart2', 'expensePart3', 'expensePart4', 'expensePart5']
+            self.expenseCashflowTable = self.expenseCashflowTable.merge(self.mbsModel['total']['inflow'][c], how='left', on='couponDate')
+
+            # Оставляем только платежи, которые состоятся строго после Даты оценки:
+            future = self.expenseCashflowTable['couponDate'] > self.pricingDate
+            self.expenseCashflowTable = self.expenseCashflowTable[future]
+
+            # В основной модели расходы не рассчитываются для уже известных купонных выплат.
+            # Если такая ситуация возникла, необходимо их досчитать:
+            self.expenseCashflowTable.reset_index(inplace=True, drop=True)
+            nan_expenses_index = np.where(np.isnan(self.expenseCashflowTable['expensePart1'].values))[0]
+            for i in nan_expenses_index:
+
+                coupon_date = self.expenseCashflowTable['couponDate'].values[i]
+                index = np.where(self.couponsStructure['couponDate'] == coupon_date)
+                d1 = self.couponsStructure['paymentPeriodDays'].astype(float).values[index][0] / 365.0
+                d2 = self.couponsStructure['couponPeriodDays'].astype(float).values[index][0] / 365.0
+                d3 = self.couponsStructure['couponPeriodDays'].shift(-1).fillna(0.0).astype(float).values[index][0] / 365.0
+                p = self.expenseCashflowTable['issuePrincipalStartPeriod'].astype(float).values[i]
+                c = float(self.couponPeriod)
+
+                # Основные статьи расходов:
+                self.expenseCashflowTable.loc[i, 'expensePart1'] = np.round(p * self.mortgageAgentExpense1 / 100.0 * d3, 2)
+                if coupon_date == self.firstCouponDate:
+                    self.expenseCashflowTable.loc[i, 'expensePart1'] += np.round(p * self.mortgageAgentExpense1 / 100.0 * d2, 2)
+                self.expenseCashflowTable.loc[i, 'expensePart2'] = np.round(p * self.mortgageAgentExpense2 / 100.0 * d1, 2)
+
+                # Вознаграждение спец. депозитария:
+                minimum = self.specDepMinMonthIssueDoc * 12.0 * d1
+                self.expenseCashflowTable.loc[i, 'expensePart3'] = np.round(np.maximum(p * self.specDepRateIssueDoc / 100.0 * d1, minimum)
+                                                                            + self.specDepCompensationMonthIssueDoc * 12.0 * d1, 2)
+
+                # Управляющая и бухгалтерская организации:
+                self.expenseCashflowTable.loc[i, 'expensePart4'] = 2 * np.round(p * self.manAccQuartRateIssueDoc / 100.0 * 4.0 * d1
+                                                                                + self.manAccQuartFixIssueDoc * 4.0 * d1, 2)
+
+                # Расчетный агент:
+                self.expenseCashflowTable.loc[i, 'expensePart5'] = np.round(self.paymentAgentYearIssueDoc * d1, 2)
+
+            self.expenseCashflowTable['couponDate'] = self.expenseCashflowTable['couponDate'].values.astype(s_type).astype(str)
+            self.calculationOutput['expenseCashflowTable'] = self.expenseCashflowTable.to_dict('list')
 
         # -------------------------------------------------------------------------------------------------------------------------------- #
         # ----- ДАННЫЕ ДЛЯ ГРАФИКА ДЕНЕЖНОГО ПОТОКА ПО ИЦБ ДОМ.РФ ------------------------------------------------------------------------ #
@@ -2728,7 +3012,7 @@ class Convention(object):
 
             # Средневзвешенный по модельным суммам остатков основного долна в ипотечном покрытии CPR на протяжении обращения
             # выпуска облигаций:
-            self.calculationParameters['modelCPR'] = self.modelCPR
+            self.calculationParameters['modelCPR'] = None if np.isnan(self.modelCPR) else self.modelCPR
             # Средневзвешенный по модельным суммам остатков основного долна в ипотечном покрытии CPR до погашения последнего
             # кредита в ипотечном покрытии (определяется только в том случае, если ипотечное покрытие моделируется до конца):
             self.calculationParameters['poolModelCPR'] = self.poolModelCPR
@@ -2746,7 +3030,6 @@ class Convention(object):
     def calculate(self):
 
         """ Запуск расчета """
-
         if self.runCashflowModel:
             # ---------------------------------------------------------------------------------------------------------------------------- #
             # ----- РАСЧЕТ ДЕНЕЖНОГО ПОТОКА ПО ИПОТЕЧНОМУ ПОКРЫТИЮ ----------------------------------------------------------------------- #

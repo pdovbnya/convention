@@ -15,24 +15,17 @@ from convention import Convention
 from auxiliary import *
 warnings.filterwarnings('ignore')
 
-# Расчет с учетом требований МСФО (актуально только для бухгалтерской отчетности):
-ifrs = False
-# ifrs = True
-
 # TODO! Путь для сохранения эксель-файла с результатом расчета (изменить на пользовательский!):
-save_path = r"C:\Users\pavel.dovbnya\Desktop\calculation_result.xlsx"
+save_path = r"C:\Users\pavel.dovbnya\Desktop\calculation_result1.xlsx"
 
 # Параметры расчетов. С помощью комментирования строк можно оставить только интересуемые выпуски ИЦБ ДОМ.РФ:
 calculations = [
             {'bondID': 'RU000A1074A5', 'zSpread': 100.0},
-            {'bondID': 'RU000A105NP4', 'zSpread': 100.0},
+            {'bondID': 'RU000A109L98', 'requiredKeyRatePremium': 100.0},
 ]
 
 # Последовательный запуск расчетов в calculations:
 for calculation in calculations:
-
-    # Расчет с учетом требований МСФО (актуально только для бухгалтерской отчетности):
-    calculation['ifrs'] = ifrs
 
     # Включаем progressBar:
     calculation['progressBar'] = True
@@ -49,6 +42,7 @@ for calculation in calculations:
     rslt['zcycDateTime'] = res['pricingParameters']['zcycDateTime']
     rslt['modelCPR'] = res['calculationParameters']['modelCPR']
     rslt['poolModelCPR'] = res['calculationParameters']['poolModelCPR']
+
     # — ожидаемый денежный поток по ипотечному покрытию:
     empty = pd.DataFrame([])
     pool_total = pd.DataFrame(res['poolCashflowTable']['total']) if res['poolCashflowTable']['total'] is not None else empty
@@ -58,10 +52,8 @@ for calculation in calculations:
     subs = pd.DataFrame(res['subsidyCashflowTable']) if res['subsidyCashflowTable'] is not None else empty
     # — ожидаемый денежный поток по ИЦБ ДОМ.РФ:
     bond = pd.DataFrame(res['mbsCashflowTable']) if res['mbsCashflowTable'] is not None else empty
-    # — ожидаемый денежный поток по свопу между ДОМ.РФ и Ипотечным агентом (при наличии):
-    swap = pd.DataFrame(res['swapCashflowTable']) if res['swapCashflowTable'] is not None else empty
 
-    for table in [rslt, pool_total, pool_fixed, pool_float, subs, bond, swap]:
+    for table in [rslt, pool_total, pool_fixed, pool_float, subs, bond]:
         if not table.empty:
             table['isin'] = calculation['bondID']
             table['pricingDate'] = res['pricingParameters']['pricingDate']
@@ -81,15 +73,14 @@ for calculation in calculations:
     bond = bond[(bond['cashflowType'] == 1) | (bond['cashflowType'] == 0)]
     bond.reset_index(inplace=True, drop=True)
 
-    rslt = rslt[rslt_cols_ifrs if ifrs else rslt_cols]
-    pool_total = pool_total[pool_cols_ifrs if ifrs else pool_cols] if res['poolCashflowTable']['total'] is not None else empty
-    pool_fixed = pool_fixed[pool_cols_ifrs if ifrs else pool_cols] if res['poolCashflowTable']['fixed'] is not None else empty
-    pool_float = pool_float[pool_cols_ifrs if ifrs else pool_cols] if res['poolCashflowTable']['float'] is not None else empty
+    rslt = rslt[rslt_cols]
+    pool_total = pool_total[pool_cols] if res['poolCashflowTable']['total'] is not None else empty
+    pool_fixed = pool_fixed[pool_cols] if res['poolCashflowTable']['fixed'] is not None else empty
+    pool_float = pool_float[pool_cols] if res['poolCashflowTable']['float'] is not None else empty
     subs = subs[subs_cols] if res['subsidyCashflowTable'] is not None else empty
     bond = bond[bond_cols] if res['mbsCashflowTable'] is not None else empty
-    swap = swap[swap_cols] if res['swapCashflowTable'] is not None else empty
 
-    for table in [rslt, pool_total, pool_fixed, pool_float, subs, bond, swap]:
+    for table in [rslt, pool_total, pool_fixed, pool_float, subs, bond]:
         for c in date_cols:
             if c in table.columns:
                 table[c] = pd.to_datetime(table[c])
@@ -100,12 +91,11 @@ for calculation in calculations:
     pool_cf_float = pd.concat([pool_cf_float, pool_float])
     subs_cf = pd.concat([subs_cf, subs])
     bond_cf = pd.concat([bond_cf, bond])
-    swap_cf = pd.concat([swap_cf, swap])
 
     del res
 
 # Сохранение результата расчета в Excel-файл:
-name = r'\TEMPLATE_IFRS.xlsx' if ifrs else r'\TEMPLATE.xlsx'
+name = r'\TEMPLATE.xlsx'
 wb = openpyxl.load_workbook(os.getcwd() + name)
 export_table(wb["Оценка"], rslt_cf, 2)
 export_table(wb["Все кредиты"], pool_cf_total, 2)
@@ -113,6 +103,4 @@ export_table(wb["Фиксированная часть"], pool_cf_fixed, 2)
 export_table(wb["Плавающая часть"], pool_cf_float, 2)
 export_table(wb["Формирование субсидий"], subs_cf, 2)
 export_table(wb["ИЦБ"], bond_cf, 2)
-if ifrs:
-    export_table(wb["Своп"], swap_cf, 2)
 wb.save(save_path)

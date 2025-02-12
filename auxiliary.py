@@ -22,7 +22,6 @@ import logging
 
 logger = logging.getLogger('logger')
 
-
 s_type = 'datetime64[s]'
 d_type = 'datetime64[D]'
 m_type = 'datetime64[M]'
@@ -97,7 +96,8 @@ class EXCEPTIONS(object):
 
     _10 = 'Значение CDR может быть задано от 0 до 20% годовых'
 
-    _11 = 'Произвести расчет по требованиям МСФО на {} невозможно, т.к. на {} отсутствует отчет сервисного агента'
+    _11 = ('Произвести расчет по требованиям МСФО на {} невозможно, т.к. на {} отсутствует отчет сервисного агента. Пожалуйста, обратитесь в '
+           'тех. поддержку по адресу calculator.service@domrf.ru')
 
     _12 = ('С помощью имеющихся исторических данных сервисных отчетов не удалось восстановить денежный поток в один из прошедших месяцев. '
            'Пожалуйста, обратитетсь в тех. поддержку по адресу calculator.service@domrf.ru')
@@ -107,6 +107,18 @@ class EXCEPTIONS(object):
            'ипотечного покрытия только на {} млн руб. Это значит, что у Ипотечного агента в первом расчетном периоде недостаточно средств, '
            'чтобы вернуть оригинатору разницу между суммой основного долга в ипотечном покрытии на дату передачи и объемом выпуска. '
            'В Калькулятор заданы неверные параметры. Пожалуйста, обратитесь в тех. поддержку по адресу calculator.service@domrf.ru')
+
+    _14 = ('Оценка по требованиям МФСО может проводиться либо на Дату размещения, либо на последний день отчетного месяца. '
+           'Укажите корректную дату оценки в параметре pricingDate')
+
+    _15 = ('По состоянию на {} не были обновлены параметры модели ставки рефинансирования ипотеки. Расчет по требованиям МСФО на {} не '
+           'может быть проведен. Пожалуйста, обратитесь в тех. поддержку по адресу calculator.service@domrf.ru')
+
+    _16 = ('Дата рыночной траектории ключевой ставки по котировкам свопов ({}) не равна дате КБД ({}). Расчет по требованиям МСФО на {} не '
+           'может быть проведен. Пожалуйста, обратитесь в тех. поддержку по адресу calculator.service@domrf.ru')
+
+    _17 = ('По состоянию на {} не были обновлены параметры S-кривых. Расчет по требованиям МСФО на {} не может быть проведен. '
+           'Пожалуйста, обратитесь в тех. поддержку по адресу calculator.service@domrf.ru')
 
 
 # ----- ПРЕДУПРЕЖДЕНИЯ ------------------------------------------------------------------------------------------------------------------- #
@@ -122,11 +134,11 @@ class CONSTRAINTS(object):
 
     """ Ограничения на ввод параметров оценки """
 
-    ZSPRD_MIN, ZSPRD_MAX = -300, 500
-    GSPRD_MIN, GSPRD_MAX = -300, 500
+    ZSPRD_MIN, ZSPRD_MAX = -300, 1000
+    GSPRD_MIN, GSPRD_MAX = -300, 1000
     DIRTY_MIN, DIRTY_MAX = 10, 150
     CLEAN_MIN, CLEAN_MAX = 10, 150
-    PREMI_MIN, PREMI_MAX = -300, 500
+    PREMI_MIN, PREMI_MAX = -300, 1000
     COUPN_MIN, COUPN_MAX = 0, 20
     FXPRM_MIN, FXPRM_MAX = 0, 300
 
@@ -283,8 +295,6 @@ def Y(params, t):
 # ----- ЗАПРОС НА ОБНОВЛЕНИЕ ДОЛИ ГОТОВНОСТИ РАСЧЕТА НА САЙТЕ КАЛЬКУЛЯТОРА --------------------------------------------------------------- #
 def update(connection_id, percent, progress_bar=None):
 
-    # logger.info('--calling update')
-
     percent = np.round(percent, 0)
 
     if connection_id is None and progress_bar is not None:
@@ -292,9 +302,7 @@ def update(connection_id, percent, progress_bar=None):
         progress_bar.update(int(progress_delta))
 
     if connection_id is None:
-        logger.info('--connection id is None')
         return
-
 
 # ----- ТЕХНИЧЕСКИЕ ПЕРЕМЕННЫЕ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТА РАСЧЕТА В EXCEL-ФАЙЛ ------------------------------------------------------------ #
 rslt_cf = pd.DataFrame([])
@@ -303,26 +311,17 @@ pool_cf_fixed = pd.DataFrame([])
 pool_cf_float = pd.DataFrame([])
 subs_cf = pd.DataFrame([])
 bond_cf = pd.DataFrame([])
-swap_cf = pd.DataFrame([])
 
-rslt_cols = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'dirtyPrice', 'cleanPrice', 'modelCPR']
-
-rslt_cols_ifrs = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime',
-                  'dirtyPrice', 'cleanPrice', 'swapPrice', 'swapPriceRub', 'modelCPR', 'poolModelCPR']
+rslt_cols = ['isin', 'pricingDate', 'poolReportDate', 'zcycDateTime', 'zSpread',
+             'requiredKeyRatePremium', 'dirtyPrice', 'cleanPrice', 'modelCPR']
 
 pool_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'amortization', 'yield', 'subsidyPaid', 'cpr']
-
-pool_cols_ifrs = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt',
-                  'amortization', 'amortizationIFRS', 'yield', 'yieldIFRS', 'subsidyPaid', 'expensePart1', 'expensePart2', 'cpr']
 
 subs_cols = ['isin', 'pricingDate', 'reportDate', 'paymentMonth', 'debt', 'keyRateStartDate', 'keyRate',
              'waKeyRateDeduction', 'floatFraction', 'subsidyAccrued', 'subsidyPaymentDate', 'subsidyCouponDate', 'subsidyPaid']
 
 bond_cols = ['isin', 'pricingDate', 'couponDate', 'bondPrincipalStartPeriod', 'bondAmortization',
              'bondCouponPayments', 'issuePrincipalStartPeriod', 'issueAmortization', 'issueCouponPayments']
-
-swap_cols = ['isin', 'pricingDate', 'nettingDate', 'fixedSum', 'yield', 'subsidy', 'reinvestment',
-             'expense', 'accruedYield', 'floatSum']
 
 date_cols = ['pricingDate', 'zcycDateTime', 'poolReportDate', 'reportDate', 'paymentMonth', 'keyRateStartDate',
              'subsidyPaymentDate', 'subsidyCouponDate', 'couponDate', 'nettingDate']

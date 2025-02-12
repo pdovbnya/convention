@@ -12,8 +12,8 @@ from requests import post
 link = u'https://калькулятор.дом.рф:8193/Convention2/v2/Calculate'
 
 params = {
-            'bondID': 'RU000A1074A5',
-            'zSpread': 100,
+            'bondID': 'RU000A10AQC0',
+            'zSpread': 100
          }
 
 header_dict = {'Content-Type': 'application/json'}

@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import time
 import copy
-
 from requests import get
 from iteround import saferound
 
@@ -21,8 +20,8 @@ warnings.filterwarnings('ignore')
 np.seterr(all='ignore')
 
 
-def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model_data, s_curves, cdr, cpr=None, ifrs=False,
-                       no_cdr_months=[0, 0], reinvestment=False, stop_date=None, key_rate_forecast=None,
+def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model_data, s_curves, cdr, cpr=None, s_curves_shift=0.0,
+                       ifrs=False, no_cdr_months=[0, 0], reinvestment=False, stop_date=None, key_rate_forecast=None, subsidy_delay=True,
                        progress_bar=None, connection_id=None, current_percent=0.0, status_delta=0.0, pool_data=None):
     """
     ----------------------------------------------------------------------------------------------------------------------------------------
@@ -39,27 +38,29 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
             4. key_rate_model_data   — данные, необходимые для расчета необходимые для расчета Модельной траектории Ключевой ставки и
                                        Модельной траектории среднемесячной ставки рефинансирования ипотеки
             5. s_curves              — Параметры S-кривых для расчета
-            6. cdr                   — значение Модельного CDR
+            6. cdr                   — значение Модельного CDR в % годовых
 
         Опциональные:
             1. cpr                  — пользовательское значение CPR для каждого платежа по каждому кредиту (одно значение на все платежи).
                                       При заданном CPR S-кривые и Модельная траектория среднемесячной рыночной ставки рефинансирования ипо-
                                       теки не используются. Каждый платеж по каждому кредиту рассчитывается исходя из заданного значения CPR
-            2. ifrs                 — True/False: моделировать ипотечное покрытие с учетом требований МСФО, по умолчанию false
-            3. no_cdr_months        — [0,0]: массив из двух целых чисел, первое из которых — количество месяцев от даты среза ипотечного
+            2. s_curves_shift       — значение для сдвига всех S-кривых вверх (если положительное) или вниз (если отрицательное), в % год.
+            3. ifrs                 — True/False: моделировать ипотечное покрытие с учетом требований МСФО, по умолчанию false
+            4. no_cdr_months        — [0,0]: массив из двух целых чисел, первое из которых — количество месяцев от даты среза ипотечного
                                       покрытия, с которого нужно обнулить дефолтность, второе — количество месяцев, на которое нужно
                                       обнулить дефолтность (необходимо для того, чтобы учесть, что на дату передачи в ипотечном покрытии нет
                                       кредитов с просроченной задолженностью)
-            4. reinvestment         — True/False: добавить в качестве выходных данных модели ежедневный денежный поток на баланс Ипотечного
+            5. reinvestment         — True/False: добавить в качестве выходных данных модели ежедневный денежный поток на баланс Ипотечного
                                       агента для дальнейшего расчета начисления процентной ставки на остаток на счете Ипотечного агента
-            5. stop_date            — точный день в формате даты, до которого необходимо моделировать платежи по кредитам
-            6. key_rate_forecast    — пользовательская траектория значений Ключевой ставки
-            7. Для отправки процентов готовности расчета:
-                    7.1 progress_bar         — запущенный в консоли progress bar
-                    7.2 connection_id        — идентификатор соединения с сайтом
-                    7.3 current_percent      — текущее значение готовности расчета в процентах
-                    7.4 status_delta         — дельта в процентах, на которую нужно увеличивать значение готовности расчета
-            8. pool_data            — явно заданные параметры кредитов, может быть как путь на csv файл с данными, так и словарем с данными
+            6. stop_date            — точный день в формате даты, до которого необходимо моделировать платежи по кредитам
+            7. key_rate_forecast    — пользовательская траектория значений Ключевой ставки
+            8. subsidy_delay        — True/False: учитывать задержку в выплате субсидий
+            9. Для отправки процентов готовности расчета:
+                    9.1 progress_bar         — запущенный в консоли progress bar
+                    9.2 connection_id        — идентификатор соединения с сайтом
+                    9.3 current_percent      — текущее значение готовности расчета в процентах
+                    9.4 status_delta         — дельта в процентах, на которую нужно увеличивать значение готовности расчета
+            10. pool_data            — явно заданные параметры кредитов, может быть как путь на csv файл с данными, так и словарем с данными
 
     ----------------------------------------------------------------------------------------------------------------------------------------
 
@@ -129,6 +130,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     #       · startInterestDay     — День начала процентного периода             [ОТ 1 ДО 31]
     #       · governProgramType    — Гос. программа по кредиту                   [NONE/1/2/3/4/5]
     #       · keyRateDeduction     — Вычет для расчета субсидии по кредиту       [П.П]
+    #       · subsidyCoefficient   — Субсидируемая доля основного долга          [%]
 
     poolData = None
     if pool_data is None:
@@ -308,7 +310,8 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
                                        key_rate_model_data=key_rate_model_data,
                                        start_month=reportDate.astype(m_type) - month,
                                        stop_month=stop_date.astype(m_type) + 10 * month,
-                                       key_rate_forecast=key_rate_forecast)
+                                       key_rate_forecast=key_rate_forecast,
+                                       ifrs=ifrs)
 
     # ------------------------------------------------------------------------------------------------------------------------------------ #
     # ----- ФОРМИРОВАНИЕ БУДУЩИХ ПРОЦЕНТНЫХ ПЕРИОДОВ ДЛЯ КАЖДОГО КРЕДИТА ----------------------------------------------------------------- #
@@ -497,7 +500,14 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     incentives = current_rates - rates_monthly_avg
 
     # Для каждой даты платежа по каждому кредиту (i,j) в таблице end_dates рассчитываем ожидаемый CPR:
-    cpr = b0 + b1 * np.arctan(b2 + b3 * incentives) + b4 * np.arctan(b5 + b6 * incentives) if cpr is None else np.full(s, cpr / 100.0)
+    if cpr is None:
+        cpr = b0 + b1 * np.arctan(b2 + b3 * incentives) + b4 * np.arctan(b5 + b6 * incentives) + s_curves_shift / 100.0
+    else:
+        cpr = np.full(s, cpr / 100.0)
+
+    # Параметры S-кривых оцениваются таким образом, что в асимптотике арктангенсы не выходят за пределы диапазона от 0 до 100% годовых.
+    # Однако дополнительную проверку для сохранения CPR в диапазоне от 0 до 100% годовых следует провести:
+    cpr = np.minimum(np.maximum(cpr, 0.0), 1.0)
 
     # [ОБНОВЛЕНИЕ СТАТУСА РАСЧЕТА]
     current_percent += status_delta
@@ -646,7 +656,6 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
     pay_months = np.arange(reportDate.astype(m_type), reportDate.astype(m_type) + len(amt)).astype(m_type)
 
     # Поток по ипотечному покрытию формируется отдельно для фиксированной части и отдельной для плавающей части:
-
     fxd_amt, flt_amt = None, None
     fxd_yld, flt_yld = None, None
     fxd_amt_cpr, flt_amt_cpr = None, None
@@ -671,7 +680,8 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
         poolModel[part] = {
             'debt': None,
             'cashflow': None,
-            'accruedYield': None,
+            'accruedYield': 0.0,
+            'accruedSubsidy': 0.0,
             'reinvestment': None,
         }
 
@@ -779,8 +789,21 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
 
             # Рассчитываем размер начисленной субсидии за каждый месяц paymentMonth:
             subsidy_rates = poolModel[part]['cashflow']['keyRate'].values.reshape(-1, 1) + key_rate_deductions
+            # Если разница между ключевой ставкой и вычетом отрицательная, то субсидии не будет:
+            subsidy_rates = np.maximum(0.0, subsidy_rates)
+            # Субсидии рассчитываются на основании полученных процентов:
             subsidy_values = yld * coeffs / (current_rates / 100.0) * (subsidy_rates / 100.0)
             poolModel[part]['cashflow']['subsidy'] = saferound(np.nansum(subsidy_values, axis=1), 2)
+            # Важно, что если отчетная дата ипотечного покрытия приходится на середину месяца, то начисленная за первый paymentMonth
+            # субсидия будет рассчитана только по тем кредитам, по которым поступит платеж с даты ипотечного покрытия по конец месяца.
+            # Субсидия за платежи, которые поступили до даты среза ипотечного покрытия, не будет учитываться
+
+            # Начисленная, но не выплаченная субсидия по состоянию на дату среза ипотечного покрытия:
+            report_month = reportDate.astype(m_type).astype(d_type)
+            report_date_key_rate = all_key_rates[all_key_rates['keyRateStartDate'] <= report_month]['keyRate'].values[-1]
+            report_date_subsidy_rates = np.maximum(0.0, report_date_key_rate + key_rate_deductions)
+            accrued_subsidies = accrued_yld * coeffs / (current_rates / 100.0) * (report_date_subsidy_rates / 100.0)
+            poolModel[part]['accruedSubsidy'] = np.round(np.nansum(accrued_subsidies), 2)
 
         # Удаление лишних строк:
         stop_date = maturity_dates.max() if stop_date is None else stop_date
@@ -815,8 +838,11 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
                 subsidy_payment_months = pd.DataFrame(part_cashflow['paymentMonth'].dt.month.values, columns=['accrualMonth'])
                 subsidy_payment_months = subsidy_payment_months.merge(subsidy_months, how='left', on='accrualMonth')
                 payment_months = part_cashflow['paymentMonth'].values.astype(m_type)
-                subsidy_payment_dates = (payment_months + month * subsidy_payment_months['addMonths'].values).astype(d_type)
-                subsidy_payment_dates += (subsidy_payment_day - 1) * day
+                if subsidy_delay:
+                    subsidy_payment_dates = (payment_months + month * subsidy_payment_months['addMonths'].values).astype(d_type)
+                    subsidy_payment_dates += (subsidy_payment_day - 1) * day
+                else:
+                    subsidy_payment_dates = (payment_months + month).astype(d_type) - day
                 subsidies = pd.DataFrame({'date': subsidy_payment_dates,
                                           'subsidy': part_cashflow['subsidy'].values,
                                           'subsidyAccrualMonth': part_cashflow['paymentMonth'].values})
@@ -834,6 +860,7 @@ def loansCashflowModel(bond_id, report_date, key_rate_model_date, key_rate_model
         'debt': np.round(poolModel['fixed']['debt'] + poolModel['float']['debt'], 2),
         'cashflow': None,
         'accruedYield': np.round(poolModel['fixed']['accruedYield'] + poolModel['float']['accruedYield'], 2),
+        'accruedSubsidy': np.round(poolModel['fixed']['accruedSubsidy'] + poolModel['float']['accruedSubsidy'], 2),
     }
 
     fixed_debt = poolModel['fixed']['cashflow']['debt'].values

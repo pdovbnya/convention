@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 np.seterr(all='ignore')
 
 
-def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month, stop_month, key_rate_forecast=None):
+def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month, stop_month, key_rate_forecast=None, ifrs=False):
 
     """
     ----------------------------------------------------------------------------------------------------------------------------------------
@@ -50,6 +50,7 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
                                      использована актуальная на 09.04.2024 Ключевая ставка 16.00% год., с 10.07.2025 по 14.02.2026 будет
                                      ипользована Ключевая ставка 9.50% год., с 15.02.2026 по 19.09.2028 будет использована Ключевая ставка
                                      9.50% год., а с 20.09.2028 и до бесконечности — Ключевая ставка 7.75% год
+            2. ifrs                  — True/False: моделировать макроэкономику с учетом требований МСФО, по умолчанию false
 
     ----------------------------------------------------------------------------------------------------------------------------------------
 
@@ -269,10 +270,14 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
     # Текущие по состоянию на key_rate_model_date параметры модели ставки рефинансирования ипотеки:
     alpha0, alpha1 = None, None
     if do_model_rates:
-        history_period = refinancingRateParameters['date'] <= key_rate_model_date
+        history_period = refinancingRateParameters['date'] <= key_rate_model_date + ifrs * day
+        # ("ifrs * day" добавляется для того, чтобы в случае расчета по требованиям МСФО на Дату оценки, например, 31.03.2024
+        # использовались параметры модели ставки рефинансирования ипотеки на 01.04.2024)
         alpha0 = refinancingRateParameters[history_period]['alpha0'].values[-1]
         alpha1 = refinancingRateParameters[history_period]['alpha1'].values[-1]
 
+    # Технический параметр:
+    key_rate_forecast_given = False if key_rate_forecast is None else True
 
     # ------------------------------------------------------------------------------------------------------------------------------------ #
     # ----- РАСЧЕТ МОДЕЛЬНОЙ ТРАЕКТОРИИ КЛЮЧЕВОЙ СТАВКИ ---------------------------------------------------------------------------------- #
@@ -437,6 +442,10 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
     # Дата окончания графика — десять полных лет после окончания года, на который приходится key_rate_model_date:
     stop_date = (key_rate_model_date.astype(y_type) + 11 * year).astype(d_type) - day
 
+    if key_rate_forecast_given:
+        max_forecast_date = np.max(key_rate_forecast['date'].values)
+        stop_date = np.max([stop_date, (max_forecast_date.astype(y_type) + 1 * year).astype(d_type) - day])
+
     # ----- ИСТОРИЧЕСКАЯ ЧАСТЬ ИНТЕРАКТИВНОГО ГРАФИКА ------------------------------------------------------------------------------------ #
     # key_rate_model_date принадлежит истории (т.е. если в key_rate_model_date изменилась Ключевая ставка, полагается, что на
     # key_rate_model_date это уже известно):
@@ -513,8 +522,7 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
         current_forecast = key_rate_forecast[['date', 'key_rate']][forecast_period]
 
         current_forecast.sort_values(by='date', inplace=True)
-        duplicates = current_forecast['key_rate'] == current_forecast['key_rate'].shift(1)
-        current_forecast = current_forecast[~duplicates].reset_index(drop=True)
+        current_forecast.reset_index(drop=True, inplace=True)
 
         # Явно задаем первую координату:
         if current_forecast['date'].values[0] > key_rate_model_date + day:
@@ -531,8 +539,14 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
         start_rate = meetingsCBR[history_period]['key_rate'].values[-1]
         current_forecast = pd.DataFrame({'date': [key_rate_model_date + day, stop_date], 'key_rate': [start_rate, start_rate]})
 
+    current_forecast.reset_index(drop=True, inplace=True)
     current_forecast['key_rate'] = np.round(current_forecast['key_rate'].values * 100.0, 2)
     current_forecast_cache = current_forecast.copy(deep=True)
+
+    duplicates = current_forecast['key_rate'] == current_forecast['key_rate'].shift(1)
+    duplicates.values[0] = False
+    duplicates.values[-1] = False
+    current_forecast = current_forecast[~duplicates].reset_index(drop=True)
 
     current_forecast = pd.DataFrame({
                 'date': current_forecast['date'].values.astype(s_type).astype(str).tolist(),
@@ -540,95 +554,118 @@ def refinancingRatesModel(key_rate_model_date, key_rate_model_data, start_month,
         }).to_dict('list')
 
     # ----- МОДЕЛЬНЫЕ УЧАСТКИ ------------------------------------------------------------------------------------------------------------ #
-    # Модельный участок — горизонтальный участок на интерактивном графике, который можно с помощью мыши передвигать вверх или вниз, чтобы
-    # устанавливать пользовательскую траекторию Ключевой ставки на сайте. По умолчанию устанавливается на среднегодовых значениях
-    # Модельной траектории Ключевой ставки. Индикатор stop регулирует количество модельных участков, необходимое для графика:
-    stop = False
 
-    # Переформируем Модельную траекторию Ключевой ставки по дням, чтобы затем считать средние значения модельных участках:
-    daily_forecast = pd.DataFrame({'date': pd.date_range(key_rate_model_date + day, stop_date)})
-    daily_forecast = daily_forecast.merge(current_forecast_cache, how='left', on='date').ffill()
+    if not key_rate_forecast_given:
+        # Модельный участок — горизонтальный участок на интерактивном графике, который можно с помощью мыши передвигать вверх или вниз,
+        # чтобы устанавливать пользовательскую траекторию Ключевой ставки на сайте. По умолчанию устанавливается на среднегодовых значениях
+        # Модельной траектории Ключевой ставки. Индикатор stop регулирует количество модельных участков, необходимое для графика:
+        stop = False
 
-    # Первый модельный участок — с даты, следующей после key_rate_model_date по конец года key_rate_model_date:
-    first_start = key_rate_model_date + day
-    first_end = (first_start.astype(y_type) + year).astype(d_type)
-    # В том случае, если first_end больше, чем stop_date, ограничиваем первый участок на stop_date:
-    if stop_date < first_end:
-        stop = Truefirst_end
-        first_end = stop_date
-    # Определяем значение, которое необходимо выставить по умолчанию на первом участке:
-    first_period = (daily_forecast['date'] >= first_start) & (daily_forecast['date'] < first_end)
-    first_val = np.round(daily_forecast['key_rate'][first_period].values.mean() * 4.0, 0) / 4.0
+        # Переформируем Модельную траекторию Ключевой ставки по дням, чтобы затем считать средние значения модельных участках:
+        daily_forecast = pd.DataFrame({'date': pd.date_range(key_rate_model_date + day, stop_date)})
+        daily_forecast = daily_forecast.merge(current_forecast_cache, how='left', on='date').ffill()
 
-    # По аналогии определяем дату начала, дату конца и значение на втором модельном участке (если он может быть):
-    second_start = None
-    second_end = None
-    second_val = None
-    if not stop:
-        second_start = first_end
-        second_end = (second_start.astype(y_type) + year).astype(d_type)
-        if stop_date < second_end:
-            stop = True
-            second_end = stop_date
-        second_period = (daily_forecast['date'] >= second_start) & (daily_forecast['date'] < second_end)
-        second_val = np.round(daily_forecast['key_rate'][second_period].values.mean() * 4.0, 0) / 4.0
+        # Первый модельный участок — с даты, следующей после key_rate_model_date по конец года key_rate_model_date:
+        first_start = key_rate_model_date + day
+        first_end = (first_start.astype(y_type) + year).astype(d_type)
+        # В том случае, если first_end больше, чем stop_date, ограничиваем первый участок на stop_date:
+        if stop_date < first_end:
+            stop = first_end
+            first_end = stop_date
+        # Определяем значение, которое необходимо выставить по умолчанию на первом участке:
+        first_period = (daily_forecast['date'] >= first_start) & (daily_forecast['date'] < first_end)
+        first_val = np.round(daily_forecast['key_rate'][first_period].values.mean() * 4.0, 0) / 4.0
 
-    # По аналогии определяем дату начала, дату конца и значение на третьем модельном участке (если он может быть):
-    third_start = None
-    third_end = None
-    third_val = None
-    if not stop:
-        third_start = second_end
-        third_end = (third_start.astype(y_type) + year).astype(d_type)
-        if stop_date < third_end:
-            stop = True
-            third_end = stop_date
-        third_period = (daily_forecast['date'] >= third_start) & (daily_forecast['date'] < third_end)
-        third_val = np.round(daily_forecast['key_rate'][third_period].values.mean() * 4.0, 0) / 4.0
+        # По аналогии определяем дату начала, дату конца и значение на втором модельном участке (если он может быть):
+        second_start = None
+        second_end = None
+        second_val = None
+        if not stop:
+            second_start = first_end
+            second_end = (second_start.astype(y_type) + year).astype(d_type)
+            if stop_date < second_end:
+                stop = True
+                second_end = stop_date
+            second_period = (daily_forecast['date'] >= second_start) & (daily_forecast['date'] < second_end)
+            second_val = np.round(daily_forecast['key_rate'][second_period].values.mean() * 4.0, 0) / 4.0
 
-    # По аналогии определяем дату начала, дату конца и значение на третьем модельном участке (если он может быть). Четвертый участок всегда
-    # заканчивается на stop_date, потому что максимум модельных участков может быть четыре:
-    fourth_start = None
-    fourth_end = None
-    fourth_val = None
-    if not stop:
-        fourth_start = third_end
-        fourth_end = stop_date
-        fourth_period = (daily_forecast['date'] >= fourth_start) & (daily_forecast['date'] <= fourth_end)
-        fourth_val = np.round(daily_forecast['key_rate'][fourth_period].values.mean() * 4.0, 0) / 4.0
+        # По аналогии определяем дату начала, дату конца и значение на третьем модельном участке (если он может быть):
+        third_start = None
+        third_end = None
+        third_val = None
+        if not stop:
+            third_start = second_end
+            third_end = (third_start.astype(y_type) + year).astype(d_type)
+            if stop_date < third_end:
+                stop = True
+                third_end = stop_date
+            third_period = (daily_forecast['date'] >= third_start) & (daily_forecast['date'] < third_end)
+            third_val = np.round(daily_forecast['key_rate'][third_period].values.mean() * 4.0, 0) / 4.0
+
+        # По аналогии определяем дату начала, дату конца и значение на третьем модельном участке (если он может быть). Четвертый участок
+        # всегда заканчивается на stop_date, потому что максимум модельных участков может быть четыре:
+        fourth_start = None
+        fourth_end = None
+        fourth_val = None
+        if not stop:
+            fourth_start = third_end
+            fourth_end = stop_date
+            fourth_period = (daily_forecast['date'] >= fourth_start) & (daily_forecast['date'] <= fourth_end)
+            fourth_val = np.round(daily_forecast['key_rate'][fourth_period].values.mean() * 4.0, 0) / 4.0
+
+        model = [
+                 {
+                     'start': first_start.astype(s_type).astype(str),
+                     'end': first_end.astype(s_type).astype(str),
+                     'value': first_val,
+                 },
+                 {
+                     'start': second_start.astype(s_type).astype(str) if second_start is not None else None,
+                     'end': second_end.astype(s_type).astype(str) if second_end is not None else None,
+                     'value': second_val if second_val is not None else None,
+                 },
+                 {
+                     'start': third_start.astype(s_type).astype(str) if third_start is not None else None,
+                     'end': third_end.astype(s_type).astype(str) if third_end is not None else None,
+                     'value': third_val if third_val is not None else None,
+                 },
+                 {
+                     'start': fourth_start.astype(s_type).astype(str) if fourth_start is not None else None,
+                     'end': fourth_end.astype(s_type).astype(str) if fourth_end is not None else None,
+                     'value': fourth_val if fourth_val is not None else None,
+                 },
+        ]
+
+    else:
+        # Если траектория ключевой ставки задана пользователем, то модельные участки соответствуют этой траектории:
+        current_forecast_cache['end'] = current_forecast_cache['date'].shift(-1)
+        current_forecast_cache = current_forecast_cache[:-1]
+        current_forecast_cache.rename(columns={'date': 'start', 'key_rate': 'value'}, inplace=True)
+        for col in ['start', 'end']:
+            current_forecast_cache[col] = current_forecast_cache[col].values.astype(s_type).astype(str)
+        model = current_forecast_cache.to_dict('records')
+
+    # Определение максимальной границы интерактивного графика ключевой ставки:
+    max_hist = max(history['value']) if history is not None else 0.0
+    max_curr = max(current_forecast['value']) if current_forecast is not None else 0.0
+    max_swap = max(swap_forecast['value']) if swap_forecast is not None else 0.0
+    max_cbrf = max(cb_forecast['value']) if cb_forecast is not None else 0.0
+    max_sbsm = max(cb_forecast_smooth['value']) if cb_forecast_smooth is not None else 0.0
+    max_value = max(max_hist, max_curr, max_swap, max_cbrf, max_sbsm)
+    max_rate_limit = np.ceil(max_value/5.0)*5.0
+    if max_value == max_rate_limit:
+        max_rate_limit += 5.0
 
     keyRateInteractiveGraph = {
         'minRateLimit': 0.25,
-        'maxRateLimit': 25.0,
+        'maxRateLimit': max_rate_limit,
         'macroDate': ((key_rate_model_date + day).astype(s_type) - second).astype(str),
         'history': history,
         'currentForecast': current_forecast,
         'swapForecast': swap_forecast,
         'cbForecast': cb_forecast,
         'cbForecastSmooth': cb_forecast_smooth,
-        'model': [
-            {
-                'start': first_start.astype(s_type).astype(str),
-                'end': first_end.astype(s_type).astype(str),
-                'value': first_val,
-            },
-            {
-                'start': second_start.astype(s_type).astype(str) if second_start is not None else None,
-                'end': second_end.astype(s_type).astype(str) if second_end is not None else None,
-                'value': second_val if second_val is not None else None,
-            },
-            {
-                'start': third_start.astype(s_type).astype(str) if third_start is not None else None,
-                'end': third_end.astype(s_type).astype(str) if third_end is not None else None,
-                'value': third_val if third_val is not None else None,
-            },
-            {
-                'start': fourth_start.astype(s_type).astype(str) if fourth_start is not None else None,
-                'end': fourth_end.astype(s_type).astype(str) if fourth_end is not None else None,
-                'value': fourth_val if fourth_val is not None else None,
-            },
-        ],
-
+        'model': model,
     }
 
     ########################################################################################################################################
