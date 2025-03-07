@@ -16,7 +16,7 @@ from auxiliary import *
 warnings.filterwarnings('ignore')
 
 # TODO! Путь для сохранения эксель-файла с результатом расчета (изменить на пользовательский!):
-save_path = r"C:\Users\pavel.dovbnya\Desktop\calculation_result1.xlsx"
+save_path = r"C:\Users\pavel.dovbnya\Desktop\calculation_result.xlsx"
 
 # Параметры расчетов. С помощью комментирования строк можно оставить только интересуемые выпуски ИЦБ ДОМ.РФ:
 calculations = [

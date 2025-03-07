@@ -392,9 +392,9 @@ class Convention(object):
             self.rounding = bool(self.pricingParameters['rounding'])
         self.roundingPrecision = 2 if self.rounding else 15
 
-        # ----- ИНДИКАТОР ПРОВЕДЕНИЯ РАСЧЕТА СОГЛАСНО ТРЕБОВАНИЯМ МСФО ------------------------------------------------------------------- #
-        # В случае равенства индикатора единице расчет проводится в соответствии с требованиями стандартов МСФО
+        # ----- ПРОВЕДЕНИЕ РАСЧЕТА СОГЛАСНО ТРЕБОВАНИЯМ МСФО ИЛИ РСБУ -------------------------------------------------------------------- #
         self.ifrs = False
+        self.ras = False
         self.poolDataDelay = np.timedelta64(15, 'D')
         self.fullPoolModel = False
         self.redemptionBuyout = False
@@ -404,11 +404,15 @@ class Convention(object):
         self.monthlyFloatingSums = False
         self.origPaysAccruedYield = False
         self.lumpSumSwap = 0.0
+
         if 'ifrs' in self.pricingParameters.keys() and self.pricingParameters['ifrs'] is True:
+            self.ifrs = True # Расчет по стандартам МСФО
+        elif 'ras' in self.pricingParameters.keys() and self.pricingParameters['ras'] is True:
+            self.ras = True  # Расчет по стандартам РСБУ
 
-            self.ifrs = True
+        if self.ifrs or self.ras:
 
-            # Оценка по требованиям МФСО может проводиться либо на Дату размещения, либо на последний день отчетного месяца:
+            # Оценка по требованиям МФСО/РСБУ может проводиться либо на Дату размещения, либо на последний день отчетного месяца:
             condition_1 = self.pricingDate != self.issueDate
             condition_2 = self.pricingDate != (self.pricingDate.astype(m_type) + month).astype(d_type) - day
             if condition_1 and condition_2:
@@ -420,24 +424,28 @@ class Convention(object):
             # Отчеты Сервисного агента ипотечного покрытия по выпуску ИЦБ ДОМ.РФ на 1 число месяца приходят на 7-10 рабочий день месяца.
             # Стандарты МСФО требуют игнорировать эту задержку (например, оценка на отчетную дату 31 мая должна быть рассчитана на сервисном
             # отчете на 1 июня):
-            self.poolDataDelay = np.timedelta64(0, 'D')
+            if self.ifrs: # касается только МСФО
+                self.poolDataDelay = np.timedelta64(0, 'D')
 
             # В целях экономии расчетного времени денежный поток по ипотечному покрытию в рамках методики по умолчанию моделируется до
-            # конца расчетного периода юридической даты погашения выпуска облигаций. Стандарты МСФО требуют моделировать ипотечное покрытие
-            # в для ряда выпусков до последней выплаты:
+            # конца расчетного периода юридической даты погашения выпуска облигаций. Стандарты МСФО/РСБУ требуют моделировать ипотечное
+            # покрытие в для ряда выпусков до последней выплаты:
             self.fullPoolModel = True
 
             # По ряду выпусков нужно учитывать, что ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
             if 'redemptionBuyout' in self.pricingParameters.keys() and self.pricingParameters['redemptionBuyout'] is not None:
                 self.redemptionBuyout = bool(self.pricingParameters['redemptionBuyout'])
 
-            # В рамках расчета по МСФО денежный поток рассчитывается без задержки оплаты субсидии, однако могут запросить с задержкой:
+            # В рамках расчета по МСФО/РСБУ денежный поток рассчитывается без задержки оплаты субсидии, однако могут запросить с задержкой:
             self.subsidyDelay = False
             if 'subsidyDelay' in self.pricingParameters.keys() and self.pricingParameters['subsidyDelay'] is not None:
                 self.subsidyDelay = bool(self.pricingParameters['subsidyDelay'])
 
+            # Согласно стандартам МСФО/РСБУ, Модельный CDR должен быть равен 0:
+            self.cdr = 0.0
+
             # В рамках методики по умолчанию свопы между Ипотечным агентом ДОМ.РФ и ДОМ.РФ (а также между ДОМ.РФ и Оригинаторами ипотечных
-            # покрытий) не моделируются. Стандарты МСФО требуют проводить оценку свопов:
+            # покрытий) не моделируются. Стандарты МСФО/РСБУ требуют проводить оценку свопов:
             if self.couponType in [COUPON_TYPE.FXD, COUPON_TYPE.FLT]:
                 self.swapPricing = True
 
@@ -463,9 +471,6 @@ class Convention(object):
                 # оригинатором начисленных до даты передачи процентов равен единице, то начисленные проценты включаются в указанную сумму
                 # (если сумма меньше начисленных процентов, то выплачиваются только начисленные проценты)
                 self.lumpSumSwap = float(self.bondParameters['lumpSumSwap'])
-
-            # Согласно стандартам МСФО, Модельный CDR должен быть равен 0:
-            self.cdr = 0.0
 
         # ----- СДВИГ S-КРИВЫХ ----------------------------------------------------------------------------------------------------------- #
         # Значение для сдвига всех S-кривых вверх (если положительное) или вниз (если отрицательное), в % год:
@@ -534,17 +539,15 @@ class Convention(object):
 
         self.poolType = None
         self.governProgramsFraction = None
-        self.governProgramsFractionLowerBound = 0.5
-        self.governProgramsFractionUpperBound = 99.5
 
         # Тип ипотечного покрытия определяется исходя из значения Доли кредитов с субсидиями на Дату среза ипотечного покрытия для расчета
         # (согласно данным из таблицы Доступных для загрузки срезов ипотечного покрытия):
         index = self.pools['reportDate'] == self.poolReportDate
         self.governProgramsFraction = self.pools[index]['governProgramsFraction'].values[0]
 
-        if self.governProgramsFraction <= self.governProgramsFractionLowerBound:
+        if self.governProgramsFraction <= governProgramsFractionLowerBound:
             self.poolType = POOL_TYPE.FXD
-        elif self.governProgramsFraction >= self.governProgramsFractionUpperBound:
+        elif self.governProgramsFraction >= governProgramsFractionUpperBound:
             self.poolType = POOL_TYPE.FLT
         else:
             self.poolType = POOL_TYPE.MIX
@@ -556,10 +559,10 @@ class Convention(object):
         # Опорная ценовая метрика — ценовая метрика ИЦБ ДОМ.РФ, которая задается пользователем в явном виде и относительно которой
         # проводится расчет. В качестве опорной метрики, в зависимости от Типа расчета купонной выплаты и Типа ипотечного покрытия,
         # могут выступать:
-        self.zSpread = None  # Z-СПРЕД
-        self.gSpread = None  # G-СПРЕД
-        self.dirtyPrice = None  # ГРЯЗНАЯ ЦЕНА
-        self.cleanPrice = None  # ЧИСТАЯ ЦЕНА
+        self.zSpread = None                 # Z-СПРЕД
+        self.gSpread = None                 # G-СПРЕД
+        self.dirtyPrice = None              # ГРЯЗНАЯ ЦЕНА
+        self.cleanPrice = None              # ЧИСТАЯ ЦЕНА
         self.requiredKeyRatePremium = None  # ТРЕБУЕМАЯ НАДБАВКА
 
         # В зависимости от заданной опорной метрики определяется Тип расчета, в соответствии с котором далее будет выбран алгоритм расчета:
@@ -946,7 +949,7 @@ class Convention(object):
 
         # ----- ИНДИКАТОР МОДЕЛИРОВАНИЯ ДЕНЕЖНОГО ПОТОКА ПО ИПОТЕЧНОМУ ПОКРЫТИЮ ---------------------------------------------------------- #
         self.runCashflowModel = True
-        if self.firstModelCouponDate is None and not self.ifrs:
+        if self.firstModelCouponDate is None and not (self.ifrs or self.ras):
             # Все будущие платежи по облигации известны, моделирование денежного потока по ипотечному покрытию не производится:
             self.runCashflowModel = False
 
@@ -2299,7 +2302,7 @@ class Convention(object):
         self.cleanPriceRub = np.round(self.dirtyPriceRub - self.accruedCouponInterestRub, 2)
 
         # ----- ДОХОДНОСТЬ К ПОГАШЕНИЮ --------------------------------------------------------------------------------------------------- #
-        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == COUPON_TYPE.FXD):
+        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FXD):
 
             types = [CALCULATION_TYPE.SET_ZSPRD, CALCULATION_TYPE.SET_DIRTY, CALCULATION_TYPE.SET_CLEAN, CALCULATION_TYPE.SET_COUPN]
             if self.calculationType in types:
@@ -2313,7 +2316,7 @@ class Convention(object):
             pass
 
         # ----- Z-СПРЕД ------------------------------------------------------------------------------------------------------------------ #
-        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == COUPON_TYPE.FXD):
+        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FXD):
 
             types = [CALCULATION_TYPE.SET_GSPRD, CALCULATION_TYPE.SET_DIRTY, CALCULATION_TYPE.SET_CLEAN, CALCULATION_TYPE.SET_COUPN]
             if self.calculationType == CALCULATION_TYPE.SET_ZSPRD:
@@ -2327,7 +2330,7 @@ class Convention(object):
             pass
 
         # ----- G-СПРЕД ------------------------------------------------------------------------------------------------------------------ #
-        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == COUPON_TYPE.FXD):
+        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FXD):
 
             types = [CALCULATION_TYPE.SET_ZSPRD, CALCULATION_TYPE.SET_DIRTY, CALCULATION_TYPE.SET_CLEAN, CALCULATION_TYPE.SET_COUPN]
             if self.calculationType in types:
@@ -2362,18 +2365,23 @@ class Convention(object):
             pass
 
         # ----- ДЮРАЦИЯ МАКОЛЕЯ ---------------------------------------------------------------------------------------------------------- #
-        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == COUPON_TYPE.FXD):
+        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FXD):
             self.durationMacaulay = self.durationMacaulay_func(self.ytm)
 
-        elif self.couponType == COUPON_TYPE.FLT:
-            pass
+        else:
+            # Для расчета по требованиям МСФО/РСБУ рассчитываем "квази"-дюрацию для облигаций с (частично) плавающей ставкой купона:
+            if (self.ifrs or self.ras):
+                spread = None
+                if self.couponType == COUPON_TYPE.FLT or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FLT):
+                    spread = self.requiredKeyRatePremium
+                elif self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.MIX:
+                    spread = self.zSpread
+                df = self.dfZCYCPlusZ(spread, t_future)
+                self.durationMacaulay = max(0.001, (t_future * cf * df).sum() / (cf * df).sum())
 
         # ----- МОДИФИЦИРОВАННАЯ ДЮРАЦИЯ ------------------------------------------------------------------------------------------------- #
-        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == COUPON_TYPE.FXD):
+        if self.couponType == COUPON_TYPE.FXD or (self.couponType == COUPON_TYPE.CHG and self.poolType == POOL_TYPE.FXD):
             self.durationModified = self.durationMacaulay / (1.0 + self.ytm / 100.0)
-
-        elif self.couponType == COUPON_TYPE.FLT:
-            pass
 
         # ----- ОЦЕНКА СВОПА С ИПОТЕЧНЫМ АГЕНТОМ ----------------------------------------------------------------------------------------- #
         if self.swapPricing:
@@ -2383,8 +2391,7 @@ class Convention(object):
             self.swapModelAgent = self.mbsCashflow[c].copy(deep=True)
 
             # Непогашенный объем выпуска до выплаты купона:
-            self.swapModelAgent['principalStartPeriod'] = np.round(self.swapModelAgent['principalStartPeriod'].values * self.numberOfBonds,
-                                                                   2)
+            self.swapModelAgent['principalStartPeriod'] = np.round(self.swapModelAgent['principalStartPeriod'].values*self.numberOfBonds,2)
 
             # Рассчитываем фиксированные суммы. Т.к. своп считается от лица ДОМ.РФ в отношении Ипотечного агента, фиксированные суммы
             # указываются со знаком "минус":
@@ -2439,6 +2446,9 @@ class Convention(object):
 
             # Стоимость свопа с ипотечным агентом с точки зрения ДОМ.РФ в % от непогашенного номинала выпуска облигаций:
             self.swapPriceAgent = self.swapPriceAgentRub / (self.currentBondPrincipal * self.numberOfBonds) * 100.0
+
+            # Дюрация свопа (используется при расчете CVA/DVA):
+            self.durationMacaulaySwapFix = ((fixed_sums) * t).sum() / (fixed_sums).sum()
 
             if self.swapWithOriginator:
                 self.swapModelOriginator = self.swapModelAgent[['nettingDate', 'fixedSum', 'floatSum']]
@@ -2527,14 +2537,16 @@ class Convention(object):
         if self.durationModified is not None:
             self.pricingResult['durationModified'] = np.round(self.durationModified, self.roundingPrecision)
 
-        if self.ifrs:
+        if self.ifrs or self.ras:
             self.pricingResult['swapPriceAgent'] = None
             self.pricingResult['swapPriceAgentRub'] = None
             self.pricingResult['swapPriceOriginator'] = None
             self.pricingResult['swapPriceOriginatorRub'] = None
+            self.pricingResult['durationMacaulaySwapFix'] = None
             if self.swapPricing:
                 self.pricingResult['swapPriceAgent'] = np.round(self.swapPriceAgent, self.roundingPrecision)
                 self.pricingResult['swapPriceAgentRub'] = self.swapPriceAgentRub
+                self.pricingResult['durationMacaulaySwapFix'] = np.round(self.durationMacaulaySwapFix, self.roundingPrecision)
                 if self.swapWithOriginator:
                     self.pricingResult['swapPriceOriginator'] = np.round(self.swapPriceOriginator, self.roundingPrecision)
                     self.pricingResult['swapPriceOriginatorRub'] = self.swapPriceOriginatorRub
@@ -2716,7 +2728,7 @@ class Convention(object):
                     self.poolModelCPR = np.sum(pool_cf['debt'].values[p] * pool_cf['cpr'].values[p]) / np.sum(pool_cf['debt'].values[p])
                     self.poolModelCPR = np.round(self.poolModelCPR, 2)
 
-                if self.ifrs and self.redemptionBuyout:
+                if (self.ifrs or self.ras) and self.redemptionBuyout:
                     # Ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
                     pool_cf = pool_cf[pool_cf['reportDate'] < self.modelRedemptionDate]
                     pool_cf['amortization'].values[-1] = pool_cf['debt'].values[-1]
@@ -2724,7 +2736,7 @@ class Convention(object):
                     pool_cf['yield'].values[-1] = np.round(pool_cf['yield'].values[-1] * self.redemptionMonthFraction, 2)
 
                 if subsidy_cf is not None and part == 'total':
-                    if self.ifrs and self.redemptionBuyout:
+                    if (self.ifrs or self.ras) and self.redemptionBuyout:
                         # Учитывать, что данное ипотечное покрытие будет выкуплено оригинатором в месяц погашения выпуска облигаций:
                         subsidy_cf = subsidy_cf[subsidy_cf['reportDate'] < self.modelRedemptionDate]
                     subsidy_cf['reportDate'] = subsidy_cf['reportDate'].values.astype(s_type).astype(str)
@@ -2783,7 +2795,7 @@ class Convention(object):
 
         self.calculationOutput['expenseCashflowTable'] = None
 
-        if self.ifrs:
+        if self.ifrs or self.ras:
 
             # Формируем основу:
             c = ['couponDate', 'couponDays', 'principalStartPeriod']
@@ -2989,6 +3001,7 @@ class Convention(object):
         # -------------------------------------------------------------------------------------------------------------------------------- #
 
         self.calculationParameters['currentBondPrincipal'] = self.currentBondPrincipal
+        self.calculationParameters['currentIssuePrincipal'] = self.currentBondPrincipal * self.numberOfBonds
         self.calculationParameters['nextCouponDate'] = str(self.nextCouponDate.astype(s_type))
 
         self.calculationParameters['mortgageAgentExpense1'] = self.mortgageAgentExpense1
